@@ -1,3 +1,4 @@
+using TMPro;
 using UnityEngine;
 
 public class NPCDialogueManager : MonoBehaviour
@@ -6,7 +7,20 @@ public class NPCDialogueManager : MonoBehaviour
 	[SerializeField] public NPCProfile npc;
 
 	[TextArea][SerializeField] public string playerQuestion;
+	[Header("Speech Bubble (optional)")]
+	[Tooltip("Child TMP_Text for showing lines above the NPC.")]
 
+	public NPCSpeechBubble _bubble;
+
+
+
+	public void ShowBubble(string line)
+	{
+		if (_bubble != null)
+		{
+			_bubble.ShowText(line);
+		}
+	}
 	public void SendDialogue(string playerQuestion)
 	{
 		if (!client || !npc)
@@ -31,9 +45,11 @@ public class NPCDialogueManager : MonoBehaviour
 
 		client.Ask(systemPrompt, userPrompt, (reply) =>
 		{
+			ShowBubble(reply);
 			Debug.Log($"NPC: {reply}");
 		});
 	}
+
 	public void ClientAsk(string systemPrompt, string userPrompt, System.Action<string> onReply)
 	{
 		if (!client || !npc) return;
@@ -42,8 +58,10 @@ public class NPCDialogueManager : MonoBehaviour
 			$"Name: {npc.npcName}\n" +
 			$"Mood: {npc.mood}\n" +
 			$"Backstory: {(string.IsNullOrEmpty(npc.backstory) ? "<empty>" : npc.backstory)}\n";
-
-		client.Ask(systemPrompt, description + "\n\n" + userPrompt, onReply);
+		client.Ask(systemPrompt, userPrompt, reply =>
+		{
+			onReply?.Invoke(reply);
+		});
 	}
 
 

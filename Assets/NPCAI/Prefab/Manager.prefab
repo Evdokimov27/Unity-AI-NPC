@@ -45,7 +45,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 1d0cfd26b8c5a974a853d1a35fa41b00, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  apiKey: sk-...
+  apiKey: sk-*****
   model: gpt-4o-mini
   temperature: 0.7
   defaultResponseLanguage: auto
@@ -62,6 +62,16 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   client: {fileID: 5462901621754514643}
-  candidates: []
+  candidates:
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
   failOnNone: 1
   autoCollectByTag: 0
