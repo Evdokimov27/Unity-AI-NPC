@@ -12,7 +12,7 @@ public class NPCDialogueManagerEditor : Editor
 
 		if (GUILayout.Button("Ask NPC"))
 		{
-			dialogue.SendDialogue();
+			dialogue.SendDialogue(dialogue.playerQuestion);
 		}
 	}
 }

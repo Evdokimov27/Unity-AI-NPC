@@ -23,6 +23,7 @@ public class WalkAction : MonoBehaviour, IActionStep
 	private void Awake()
 	{
 		_agent = GetComponent<NavMeshAgent>();
+
 	}
 
 	public void Begin(ActionContext context, Action<bool> onComplete)

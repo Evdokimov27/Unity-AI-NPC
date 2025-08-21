@@ -5,9 +5,9 @@ public class NPCDialogueManager : MonoBehaviour
 	[SerializeField] private ChatGPTClient client;
 	[SerializeField] public NPCProfile npc;
 
-	[TextArea][SerializeField] private string playerQuestion;
+	[TextArea][SerializeField] public string playerQuestion;
 
-	public void SendDialogue()
+	public void SendDialogue(string playerQuestion)
 	{
 		if (!client || !npc)
 		{
