@@ -13,21 +13,17 @@ public class NPCSpeechBubble : MonoBehaviour
 	[Tooltip("Seconds to keep text visible after last change.")]
 	public float visibleTime = 4f;
 
+	public bool IsVisible { get; private set; }
+
 	private Coroutine hideRoutine;
 
-	/// <summary>
-	/// Call this when the NPC says something.
-	/// </summary>
 	public void ShowText(string line)
 	{
 		if (!textUI) return;
-
 		textUI.gameObject.SetActive(true);
 		textUI.text = line;
-
-		// Restart countdown
-		if (hideRoutine != null)
-			StopCoroutine(hideRoutine);
+		IsVisible = true;
+		if (hideRoutine != null) StopCoroutine(hideRoutine);
 		hideRoutine = StartCoroutine(HideLater());
 	}
 
@@ -35,6 +31,7 @@ public class NPCSpeechBubble : MonoBehaviour
 	{
 		yield return new WaitForSeconds(visibleTime);
 		if (textUI) textUI.gameObject.SetActive(false);
+		IsVisible = false;
 		hideRoutine = null;
 	}
 }

@@ -490,11 +490,12 @@ MonoBehaviour:
   tryInteractAtPOI: 0
   interactTriggerDistance: 2
   chatRange: 3
-  chatCooldown: 15
+  chatCooldown: 30
   npcLayer:
     serializedVersion: 2
     m_Bits: 4294967295
   facePartnerOnChat: 1
+  chatStartChance: 0.4
   OnChatRequested:
     m_PersistentCalls:
       m_Calls:

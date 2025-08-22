@@ -34,19 +34,21 @@ public class NPCDialogueManager : MonoBehaviour
 			$"Name: {(string.IsNullOrEmpty(npc.npcName) ? "<empty>" : npc.npcName)}\n" +
 			$"Mood: {(string.IsNullOrEmpty(npc.mood) ? "<empty>" : npc.mood)}\n" +
 			$"Backstory: {(string.IsNullOrEmpty(npc.backstory) ? "<empty>" : npc.backstory)}\n\n" +
+			$"In the answer, do not write information if it is not asked about.\n" +
+			$"Don't write the character's name in the answer.\n" +
 			"If any field is <empty>, roleplay a reason why this info is missing (make it part of the NPC's personality or story).";
 
 		string systemPrompt =
 			"You are roleplaying as an NPC in a video game. " +
 			"Always stay in character and answer like a person would. " +
-			"Keep answers short (1-3 sentences).";
+			"Don't make long sentences (no more than 3 sentences).";
 
 		string userPrompt = description + "\n\nPlayer: " + playerQuestion;
 
 		client.Ask(systemPrompt, userPrompt, (reply) =>
 		{
 			ShowBubble(reply);
-			Debug.Log($"NPC: {reply}");
+			Debug.Log($"{reply}");
 		});
 	}
 

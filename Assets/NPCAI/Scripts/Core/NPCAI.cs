@@ -1,4 +1,5 @@
-﻿using System;
+﻿// NPCAI.cs
+using System;
 using System.Collections;
 using System.Linq;
 using System.Reflection;
@@ -23,18 +24,8 @@ public class NPCAI : MonoBehaviour
 
 	[Header("Intent")]
 	public TaskMode taskMode = TaskMode.Auto;
-	public KeywordSet movementKeywords = new KeywordSet
-	{
-		entries = new[] { "go to", "walk to", "approach", "move to", "come to", "head to" },
-		minSimilarity = 0.78f
-	};
-	public KeywordSet interactionKeywords = new KeywordSet
-	{
-		entries = new[] { "open", "close", "press", "toggle", "switch", "use", "activate", "deactivate", "pull", "push", "talk", "speak" },
-		minSimilarity = 0.78f
-	};
-
-	[Tooltip("If true and client is set, intent will be refined by LLM (any language).")]
+	public KeywordSet movementKeywords = new KeywordSet { entries = new[] { "go to", "walk to", "approach", "move to", "come to", "head to" }, minSimilarity = 0.78f };
+	public KeywordSet interactionKeywords = new KeywordSet { entries = new[] { "open", "close", "press", "toggle", "switch", "use", "activate", "deactivate", "pull", "push", "talk", "speak" }, minSimilarity = 0.78f };
 	public bool useLLMIntent = true;
 	public ChatGPTClient intentClient;
 	public float llmTimeoutSeconds = 2.0f;
@@ -46,6 +37,7 @@ public class NPCAI : MonoBehaviour
 	private IActionStep _currentStep;
 	private ActionContext _ctx;
 	private bool _shouldInteract;
+	private NPCWander _wander;
 
 	private void Reset()
 	{
@@ -55,6 +47,12 @@ public class NPCAI : MonoBehaviour
 		interactStep = GetComponent<InteractAction>();
 		commentator = GetComponent<NPCActionCommentator>();
 		dialogueManager = GetComponent<NPCDialogueManager>();
+		_wander = GetComponent<NPCWander>();
+	}
+
+	private void Awake()
+	{
+		if (!_wander) _wander = GetComponent<NPCWander>();
 	}
 
 	private void Update()
@@ -65,29 +63,33 @@ public class NPCAI : MonoBehaviour
 	public void GoTo(string userCommand)
 	{
 		if (verboseLogs) Debug.Log($"NPCAI: start command — \"{userCommand}\"");
-
 		_ctx = new ActionContext(gameObject);
 		_ctx.userCommand = userCommand;
-
 		_shouldInteract = DecideFromText(userCommand);
 		if (verboseLogs) Debug.Log($"NPCAI: initial intent => {(_shouldInteract ? "MoveAndInteract" : "MoveOnly")}");
-
 		StopAllCoroutines();
 		StartCoroutine(RunPipeline());
 	}
 
+	private void SuspendWander(bool v)
+	{
+		if (_wander) _wander.SetAutonomySuspended(v);
+	}
+
 	private IEnumerator RunPipeline()
 	{
-		if (!agent) { Debug.LogError("NPCAI: NavMeshAgent not set."); yield break; }
-		if (!walkStep) { Debug.LogError("NPCAI: WalkAction not set."); yield break; }
-		if (_shouldInteract && !interactStep) { Debug.LogError("NPCAI: intent requires InteractAction, but it's not set."); yield break; }
+		SuspendWander(true);
+
+		if (!agent) { Debug.LogError("NPCAI: NavMeshAgent not set."); SuspendWander(false); yield break; }
+		if (!walkStep) { Debug.LogError("NPCAI: WalkAction not set."); SuspendWander(false); yield break; }
+		if (_shouldInteract && !interactStep) { Debug.LogError("NPCAI: intent requires InteractAction, but it's not set."); SuspendWander(false); yield break; }
 
 		if (resolveStep)
 		{
 			if (verboseLogs) Debug.Log("NPCAI: ResolveTargetAuto...");
 			bool ok = false;
 			yield return RunStep(resolveStep, r => ok = r);
-			if (!ok && stopOnFirstFail) { if (verboseLogs) Debug.LogWarning("NPCAI: target not resolved — stopping."); yield break; }
+			if (!ok && stopOnFirstFail) { if (verboseLogs) Debug.LogWarning("NPCAI: target not resolved — stopping."); SuspendWander(false); yield break; }
 
 			if (taskMode == TaskMode.Auto)
 			{
@@ -103,7 +105,7 @@ public class NPCAI : MonoBehaviour
 					if (verboseLogs) Debug.Log($"NPCAI: refined by LLM => {(_shouldInteract ? "MoveAndInteract" : "MoveOnly")}");
 				}
 
-				if (_shouldInteract && !interactStep) { Debug.LogError("NPCAI: intent requires InteractAction, but it's not set."); yield break; }
+				if (_shouldInteract && !interactStep) { Debug.LogError("NPCAI: intent requires InteractAction, but it's not set."); SuspendWander(false); yield break; }
 			}
 		}
 
@@ -116,7 +118,7 @@ public class NPCAI : MonoBehaviour
 			bool ok = false;
 			yield return RunStep(walkStep, r => ok = r);
 			if (talkDuringMove && talkDuringMove.mode == TalkAction.TalkMode.GenerateLoop) talkDuringMove.Cancel(_ctx);
-			if (!ok && stopOnFirstFail) { if (verboseLogs) Debug.LogWarning("NPCAI: failed to reach the target."); yield break; }
+			if (!ok && stopOnFirstFail) { if (verboseLogs) Debug.LogWarning("NPCAI: failed to reach the target."); SuspendWander(false); yield break; }
 		}
 
 		if (_shouldInteract)
@@ -125,7 +127,7 @@ public class NPCAI : MonoBehaviour
 			if (verboseLogs) Debug.Log("NPCAI: InteractAction...");
 			bool ok = false;
 			yield return RunStep(interactStep, r => ok = r);
-			if (!ok && stopOnFirstFail) { if (verboseLogs) Debug.LogWarning("NPCAI: interaction failed."); yield break; }
+			if (!ok && stopOnFirstFail) { if (verboseLogs) Debug.LogWarning("NPCAI: interaction failed."); SuspendWander(false); yield break; }
 			if (talkOnFinish) { bool finOk = false; yield return RunStep(talkOnFinish, r => finOk = r); }
 		}
 		else
@@ -134,6 +136,8 @@ public class NPCAI : MonoBehaviour
 		}
 
 		if (verboseLogs) Debug.Log("NPCAI: pipeline finished.");
+
+		SuspendWander(false);
 	}
 
 	private IEnumerator RunStep(IActionStep step, Action<bool> onDone)
@@ -156,19 +160,14 @@ public class NPCAI : MonoBehaviour
 	{
 		if (taskMode == TaskMode.MoveOnly) return false;
 		if (taskMode == TaskMode.MoveAndInteract) return true;
-
 		var text = userCommand ?? string.Empty;
 		bool hasMove = movementKeywords != null && movementKeywords.Matches(text);
 		bool hasAct = interactionKeywords != null && interactionKeywords.Matches(text);
-
 		if (hasAct && hasMove) return true;
 		if (hasAct) return true;
 		if (hasMove) return false;
-
-		// default: if command looks like an imperative without movement words, assume interaction
 		var norm = KeywordMatcher.Normalize(text);
 		if (norm.Length > 0 && (norm.StartsWith("open ") || norm.StartsWith("use ") || norm.StartsWith("press "))) return true;
-
 		return false;
 	}
 
@@ -178,12 +177,9 @@ public class NPCAI : MonoBehaviour
 		string a = GetFieldString(blackboard, "actionText");
 		string c = GetFieldString(blackboard, "commandText");
 		string combo = string.Join(" ", new[] { a, c, fallbackText }.Where(s => !string.IsNullOrWhiteSpace(s)));
-
 		if (string.IsNullOrWhiteSpace(combo)) return null;
-
 		bool hasMove = movementKeywords != null && movementKeywords.Matches(combo);
 		bool hasAct = interactionKeywords != null && interactionKeywords.Matches(combo);
-
 		if (hasAct && hasMove) return true;
 		if (hasAct) return true;
 		if (hasMove) return false;
@@ -193,11 +189,9 @@ public class NPCAI : MonoBehaviour
 	private IEnumerator InferIntentLLM(string userCommand, object blackboard, Action<bool?> onDone)
 	{
 		if (!intentClient) { onDone?.Invoke(null); yield break; }
-
 		string a = GetFieldString(blackboard, "actionText");
 		string c = GetFieldString(blackboard, "commandText");
 		string payload = string.Join(" | ", new[] { userCommand, a, c }.Where(s => !string.IsNullOrWhiteSpace(s)));
-
 		string systemPrompt =
 			"You are an intent classifier for NPC commands. " +
 			"Given a player's command in ANY language, return JSON ONLY with this schema: " +
@@ -206,7 +200,6 @@ public class NPCAI : MonoBehaviour
 			"\"interact\" when the user requests an action on the target (e.g., 'open the door', 'press the button'), " +
 			"and \"both\" if both are implied. Output JSON only.";
 		string userPrompt = "Command: \"" + payload + "\"";
-
 		bool done = false;
 		bool? result = null;
 		intentClient.Ask(systemPrompt, userPrompt, reply =>
@@ -220,7 +213,6 @@ public class NPCAI : MonoBehaviour
 			catch { result = null; }
 			done = true;
 		});
-
 		float t = 0f;
 		while (!done && t < llmTimeoutSeconds) { t += Time.deltaTime; yield return null; }
 		onDone?.Invoke(result);
