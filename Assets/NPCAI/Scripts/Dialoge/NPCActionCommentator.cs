@@ -5,9 +5,6 @@ public class NPCActionCommentator : MonoBehaviour
 {
 	[SerializeField] private NPCDialogueManager dialogueManager;
 
-	/// <summary>
-	/// Generates an NPC line when starting an action
-	/// </summary>
 	public void CommentOnAction(string actionName, GameObject target)
 	{
 		if (!dialogueManager || !target) return;

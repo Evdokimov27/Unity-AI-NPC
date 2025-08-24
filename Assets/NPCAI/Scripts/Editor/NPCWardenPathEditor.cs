@@ -7,7 +7,6 @@ using UnityEngine.AI;
 [CustomEditor(typeof(NPCWander))]
 public class NPCWanderPathEditor : Editor
 {
-	// Внутренние настройки (т.к. публичных полей в NPCWander больше нет)
 	const float SELECT_RADIUS = 1.0f;
 	const float NODE_RADIUS = 0.18f;
 	static readonly Color NODE_COLOR = new Color(0.25f, 1f, 0.6f, 1f);
@@ -23,7 +22,18 @@ public class NPCWanderPathEditor : Editor
 
 	void OnEnable()
 	{
-		npc = (NPCWander)target;
+		npc = target as NPCWander;
+
+		if (npc == null)
+		{
+			if (target is Component comp)
+				npc = comp.GetComponent<NPCWander>();
+			else if (target is GameObject go)
+				npc = go.GetComponent<NPCWander>();
+		}
+
+		if (npc == null) return;
+
 		Selection.selectionChanged += OnSelectionChanged;
 		SceneView.duringSceneGui += DuringSceneGUI;
 	}
@@ -35,10 +45,15 @@ public class NPCWanderPathEditor : Editor
 		editingActive = false;
 		lastSelectedIndex = -1;
 		isDraggingPoint = false;
+		npc = null;
 	}
-
 	public override void OnInspectorGUI()
 	{
+		if (npc == null)
+		{
+			EditorGUILayout.HelpBox("NPCWander not found on target.", MessageType.Info);
+			return;
+		}
 		DrawDefaultInspector();
 		EditorGUILayout.Space();
 		if (GUILayout.Button(editingActive ? "Stop Editing" : "Edit Path (Shift=create/connect, Ctrl=delete, LMB=select/drag)", GUILayout.Height(26)))
@@ -69,15 +84,14 @@ public class NPCWanderPathEditor : Editor
 
 	void OnSelectionChanged()
 	{
-		if (!editingActive) return;
-		if (!npc || Selection.activeGameObject != npc.gameObject) StopEditing();
+		if (!editingActive || npc == null) return;
+		if (Selection.activeGameObject != npc.gameObject) { editingActive = false; Repaint(); }
 	}
 
 	void DuringSceneGUI(SceneView sv)
 	{
 		if (!editingActive) return;
 		if (!npc) return;
-		if (Selection.activeGameObject != npc.gameObject) return;
 
 		var e = Event.current;
 		if (e == null) return;

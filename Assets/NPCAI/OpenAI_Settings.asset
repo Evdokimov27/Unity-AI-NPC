@@ -1,0 +1,18 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 604eadbdd7eb3ff44a3a42479cae5d3a, type: 3}
+  m_Name: OpenAI_Settings
+  m_EditorClassIdentifier: 
+  apiKey: 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
+  model: gpt-4o-mini
+  temperature: 0.7
+  defaultResponseLanguage: auto

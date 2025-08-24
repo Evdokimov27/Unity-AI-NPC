@@ -20,7 +20,7 @@ public class NPCSpeechBubble : MonoBehaviour
 	public void ShowText(string line)
 	{
 		if (!textUI) return;
-		textUI.gameObject.SetActive(true);
+		textUI.transform.parent.gameObject.SetActive(true);
 		textUI.text = line;
 		IsVisible = true;
 		if (hideRoutine != null) StopCoroutine(hideRoutine);
@@ -30,7 +30,7 @@ public class NPCSpeechBubble : MonoBehaviour
 	private IEnumerator HideLater()
 	{
 		yield return new WaitForSeconds(visibleTime);
-		if (textUI) textUI.gameObject.SetActive(false);
+		if (textUI) textUI.transform.parent.gameObject.SetActive(false);
 		IsVisible = false;
 		hideRoutine = null;
 	}

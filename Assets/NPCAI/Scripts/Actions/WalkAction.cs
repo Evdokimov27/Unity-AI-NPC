@@ -4,10 +4,11 @@ using UnityEngine;
 using UnityEngine.AI;
 
 [DisallowMultipleComponent]
-[RequireComponent(typeof(NavMeshAgent))]
 public class WalkAction : MonoBehaviour, IActionStep
 {
 	public string StepName => "Walk";
+
+	[SerializeField] public NavMeshAgent agentOverride;
 
 	public GameObject fixedTarget;
 	public GameObject[] availableTargets;
@@ -22,8 +23,7 @@ public class WalkAction : MonoBehaviour, IActionStep
 
 	private void Awake()
 	{
-		_agent = GetComponent<NavMeshAgent>();
-
+		_agent = agentOverride;
 	}
 
 	public void Begin(ActionContext context, Action<bool> onComplete)
@@ -87,7 +87,7 @@ public class WalkAction : MonoBehaviour, IActionStep
 						   _agent.remainingDistance <= effectiveStop;
 
 		bool almostStopped = _agent.velocity.sqrMagnitude <= (velocityEpsilon * velocityEpsilon);
-
+		 
 		if (closeEnough && almostStopped)
 		{
 			if (stopAgentOnArrive)

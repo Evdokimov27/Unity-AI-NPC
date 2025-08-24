@@ -23,10 +23,6 @@ public class ChatGPTClient : MonoBehaviour
 
 	private const string endpoint = "https://api.openai.com/v1/chat/completions";
 
-	/// <summary>
-	/// Ask ChatGPT and get reply via callback.
-	/// responseLanguageOverride: if not null/empty and not 'auto', forces responses in that language.
-	/// </summary>
 	public void Ask(string systemPrompt, string userPrompt, Action<string> onReply, string responseLanguageOverride = null)
 	{
 		string finalSystem = WithLanguageDirective(systemPrompt, responseLanguageOverride);

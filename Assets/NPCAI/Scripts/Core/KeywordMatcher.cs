@@ -28,14 +28,12 @@ public static class KeywordMatcher
 			if (string.IsNullOrWhiteSpace(raw)) continue;
 			var term = Normalize(raw);
 
-			// phrase: simple substring over normalized full text
 			if (term.Contains(' '))
 			{
 				if (normText.Contains(term)) return true;
 				continue;
 			}
 
-			// single-word: fuzzy vs each token
 			foreach (var tok in tokens)
 			{
 				if (tok == term) return true;
@@ -52,7 +50,6 @@ public static class KeywordMatcher
 		if (string.IsNullOrEmpty(s)) return string.Empty;
 		s = s.ToLowerInvariant().Normalize(NormalizationForm.FormD);
 
-		// strip diacritics
 		var sb = new StringBuilder(s.Length);
 		foreach (var ch in s)
 		{
@@ -62,7 +59,6 @@ public static class KeywordMatcher
 		}
 		s = sb.ToString().Normalize(NormalizationForm.FormC);
 
-		// collapse whitespace and punctuation to spaces
 		var arr = s.Select(c => char.IsLetterOrDigit(c) ? c : ' ').ToArray();
 		s = new string(arr);
 		while (s.Contains("  ")) s = s.Replace("  ", " ");
@@ -72,7 +68,6 @@ public static class KeywordMatcher
 	public static List<string> Tokenize(string norm) =>
 		string.IsNullOrEmpty(norm) ? new List<string>() : norm.Split(' ').Where(t => t.Length > 0).ToList();
 
-	// Levenshtein similarity in [0..1]
 	public static float Similarity(string a, string b)
 	{
 		if (a == b) return 1f;

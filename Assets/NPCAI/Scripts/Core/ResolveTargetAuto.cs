@@ -36,7 +36,6 @@ public class ResolveTargetAuto : MonoBehaviour, IActionStep
 		if ((candidates == null || candidates.Length == 0) && autoCollectByTag)
 			candidates = GameObject.FindGameObjectsWithTag("Target");
 
-		// keep only active objects
 		var activeCandidates = (candidates ?? Array.Empty<GameObject>())
 			.Where(go => go && go.activeInHierarchy)
 			.ToArray();
@@ -103,7 +102,6 @@ public class ResolveTargetAuto : MonoBehaviour, IActionStep
 				return;
 			}
 
-			// match only among active candidates
 			var match = activeCandidates.FirstOrDefault(c =>
 				c && string.Equals(c.name, plan.targetId, StringComparison.OrdinalIgnoreCase));
 
