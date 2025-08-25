@@ -1,6 +1,7 @@
 ﻿using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.AI;
+using static UnityEngine.Rendering.VolumeComponent;
 
 [ExecuteAlways]
 [DisallowMultipleComponent]
@@ -11,10 +12,22 @@ public class NPCAIHub : MonoBehaviour
 
 	[Header("Feature Switches")]
 	public bool featureDialogue = false;
+	public bool featureInteractive = false;
 	public bool featureMovement = false;
 	public bool featureWander = false;
 	public bool featureInteract = true;
 	public bool featureCommentator = false;
+	public bool featureFollow = false;
+	public bool featureLogs = false;
+
+	[Header("Animation")]
+	public Animator animator;
+	public string walkBool = "isWalking";
+	public string talkBool = "isTalking";
+	public string interactBool = "isInteracting";
+	public string followBool = "isFollowing";
+	public string waitBool = "isWaiting";
+	public string wanderBool = "isWander";
 
 	[Header("Core — Dialogue")]
 	public string npcName = "";
@@ -39,7 +52,10 @@ public class NPCAIHub : MonoBehaviour
 	void OnEnable() { AutoSync(); }
 	void Awake() { AutoSync(); }
 #if UNITY_EDITOR
-	void OnValidate() { AutoSync(); }
+	void OnValidate() { AutoSync(); 
+	if (logo == null)
+				logo = UnityEditor.AssetDatabase.LoadAssetAtPath<Texture2D>("Assets/NPCAI/Icon/icon.png");
+	}
 #endif
 
 	void AutoSync()
@@ -49,11 +65,16 @@ public class NPCAIHub : MonoBehaviour
 		_isSyncing = true;
 		try
 		{
+			EnsureOnChild<NPCAI>("Core.AI");
+
 			ApplyAutoDefaults();
 			EnsureHolder(this);
 			EnsureAgentOnRoot();
+			EnsureProfile();
 			EnsureDialogue();
 			EnsureMovement();
+			EnsureFollow();
+			EnsureWander();
 			EnsureCommentator();
 			ApplyFeatureEnablement();
 			WireReferences();
@@ -124,6 +145,29 @@ public class NPCAIHub : MonoBehaviour
 		agent.enabled = true;
 		return agent;
 	}
+	void EnsureProfile()
+	{
+		EnsureOnChild<NPCProfile>("Dialogue.Profile", p =>
+		{
+			if (string.IsNullOrWhiteSpace(p.npcName)) p.npcName = gameObject.name;
+			if (string.IsNullOrWhiteSpace(p.mood)) p.mood = "neutral";
+			if (string.IsNullOrWhiteSpace(p.backstory)) p.backstory = $"This is {p.npcName}.";
+		});
+	}
+	void EnsureFollow()
+	{
+		EnsureOnChild<FollowAction>("Follow.Module", f =>
+		{
+			if (f.followDistance <= 0.01f) f.followDistance = 1.75f;
+		});
+	}
+	void EnsureWander()
+	{
+		EnsureOnChild<NPCWander>("Movement.Wander", w =>
+		{
+			w.SetAutonomySuspended(!featureWander);
+		});
+	}
 
 	void EnsureDialogue()
 	{
@@ -180,33 +224,29 @@ public class NPCAIHub : MonoBehaviour
 	void EnsureMovement()
 	{
 		EnsureAgentOnRoot();
-		EnsureOnChild<WalkAction>("Movement.Walk", w =>
+
+		var walk = EnsureOnChild<WalkAction>("Movement.Walk", w =>
 		{
 			w.arriveDistance = arriveDistance;
 			w.stopAgentOnArrive = stopAgentOnArrive;
 		});
+
 		EnsureOnChild<WaitAction>("Core.Wait");
 		EnsureOnChild<DialogueAction>("Core.Dialogue");
-		EnsureOnChild<TalkAction>("Movement.TalkOnStart", t =>
+
+		var follow = EnsureOnChild<FollowAction>("Movement.Follow", f =>
 		{
-			t.mode = TalkAction.TalkMode.FixedText;
-			t.fixedLine = "On my way.";
-		});
-		EnsureOnChild<TalkAction>("Movement.TalkDuring", t =>
-		{
-			t.mode = TalkAction.TalkMode.GenerateLoop;
-			t.llmPrompt = "Say one short line about walking.";
-		});
-		EnsureOnChild<TalkAction>("Movement.TalkFinish", t =>
-		{
-			t.mode = TalkAction.TalkMode.GenerateOnce;
-			t.llmPrompt = "Say one short line after arriving.";
+			f.followDistance = 1.75f;
 		});
 
-		EnsureOnChild<NPCAI>("Core.AI");
+		EnsureOnChild<TalkAction>("Movement.TalkOnStart", t => { t.mode = TalkAction.TalkMode.FixedText; t.fixedLine = "On my way."; });
+		EnsureOnChild<TalkAction>("Movement.TalkDuring", t => { t.mode = TalkAction.TalkMode.GenerateLoop; t.llmPrompt = "Say one short line about walking."; });
+		EnsureOnChild<TalkAction>("Movement.TalkFinish", t => { t.mode = TalkAction.TalkMode.GenerateOnce; t.llmPrompt = "Say one short line after arriving."; });
+
 		EnsureOnChild<ResolveTargetAuto>("Interact.ResolveAndUse");
 		EnsureOnChild<InteractAction>("Interact.ResolveAndUse");
 	}
+
 
 
 	void EnsureCommentator()
@@ -228,20 +268,17 @@ public class NPCAIHub : MonoBehaviour
 		var walk = FindOnChild<WalkAction>("Movement.Walk");
 		if (walk) walk.gameObject.SetActive(featureMovement);
 
+		var follow = FindOnChild<FollowAction>("Movement.Follow");  
+		if (follow) follow.gameObject.SetActive(featureMovement);
+
 		var ai = FindOnChild<NPCAI>("Core.AI");
-		if (ai) ai.gameObject.SetActive(featureMovement);
+		if (ai) ai.gameObject.SetActive(true);
 
 		var resolve = FindOnChild<ResolveTargetAuto>("Interact.ResolveAndUse");
-		if (resolve)
-		{
-			resolve.gameObject.SetActive(featureMovement);
-		}
+		if (resolve) resolve.gameObject.SetActive(featureInteractive);
+
 		var inter = resolve ? resolve.GetComponent<InteractAction>() : null;
-		if (inter)
-		{
-			inter.enabled = featureMovement && featureInteract;
-			if (ai) ai.interactStep = inter.enabled ? inter : null;
-		}
+		if (inter) inter.enabled = featureInteractive;
 
 		bool talkOn = featureMovement && featureCommentator;
 		var talkStart = FindOnChild<TalkAction>("Movement.TalkOnStart");
@@ -260,6 +297,8 @@ public class NPCAIHub : MonoBehaviour
 
 		var comm = FindOnChild<NPCActionCommentator>("Commentator");
 		if (comm) comm.gameObject.SetActive(featureCommentator);
+		if (follow) follow.gameObject.SetActive(featureFollow);
+
 	}
 
 	void TrySetField(object obj, string fieldName, object value)
@@ -333,6 +372,12 @@ public class NPCAIHub : MonoBehaviour
 	{
 		var mgr = FindOnChild<NPCDialogueManager>("Dialogue.Manager");
 		if (mgr == null) return;
+		if (mgr)
+		{
+			// проброс Animator и talkBool
+			TrySetField(mgr, "animator", animator);
+			TrySetField(mgr, "talkBool", talkBool);
+		}
 		var ai = FindOnChild<NPCAI>("Core.AI");
 		if (ai)
 		{
@@ -361,11 +406,33 @@ public class NPCAIHub : MonoBehaviour
 
 	void WireReferences()
 	{
+
 		var ai = FindOnChild<NPCAI>("Core.AI");
 		if (ai) ai.agent = GetComponent<NavMeshAgent>();
+		if (ai)
+		{
+			TrySetField(ai, "animator", animator);
+			TrySetField(ai, "walkBool", walkBool);
+			TrySetField(ai, "talkBool", talkBool);
+			TrySetField(ai, "interactBool", interactBool);
+			TrySetField(ai, "followBool", followBool);
+			TrySetField(ai, "waitBool", waitBool);
+			var wander = FindOnChild<NPCWander>("Movement.Wander");
+			if (wander)
+			{
+				TrySetField(ai, "_wander", wander);
+				TrySetField(wander, "animator", animator);
+				TrySetField(wander, "wanderBool", wanderBool);
+				TrySetField(ai, "wanderBool", wanderBool);
+			}
+
+		}
 
 		var walk = FindOnChild<WalkAction>("Movement.Walk");
 		if (ai && walk) TrySetField(ai, "walkStep", walk);
+
+		var follow = FindOnChild<FollowAction>("Movement.Follow");           
+		if (ai && follow) TrySetField(ai, "followStep", follow);             
 
 		var resolve = FindOnChild<ResolveTargetAuto>("Interact.ResolveAndUse");
 		if (ai && resolve) TrySetField(ai, "resolveStep", resolve);
@@ -387,9 +454,11 @@ public class NPCAIHub : MonoBehaviour
 		var dialogue = FindOnChild<DialogueAction>("Core.Dialogue");
 		if (ai && dialogue) TrySetField(ai, "dialogueStep", dialogue);
 
+
 		WireDialogueIntoAll();
 		WireNPCAITalkAndIntent();
 	}
+
 
 	void EnsureNavAgentWiring()
 	{
@@ -447,7 +516,9 @@ public class NPCAIHub : MonoBehaviour
 		var resolve = FindOnChild<ResolveTargetAuto>("Interact.ResolveAndUse");
 		var inter = resolve ? resolve.GetComponent<InteractAction>() : null;
 		if (inter)
-			ai.interactStep = (featureMovement && featureInteract) ? inter : null;
+			ai.interactStep = (featureMovement && featureInteractive) ? inter : null;
+		else
+			ai.interactStep = null;
 
 		ai.GoTo(userCommand);
 	}

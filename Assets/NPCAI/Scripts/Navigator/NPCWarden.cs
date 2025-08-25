@@ -20,6 +20,7 @@ public class NPCWander : MonoBehaviour
 	int queuedNodeIndex = -1;
 	float nextHopTime;
 	bool _autonomySuspended;
+	public bool IsAutonomySuspended => _autonomySuspended;
 
 	NavMeshAgent EnsureAgent()
 	{
@@ -60,6 +61,7 @@ public class NPCWander : MonoBehaviour
 				a.SetDestination(graphNodes[currentNodeIndex]);
 		}
 	}
+
 
 	void BindStartNode()
 	{

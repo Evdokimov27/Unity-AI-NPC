@@ -6,17 +6,29 @@ using UnityEngine.AI;
 [CustomEditor(typeof(NPCAIHub)), CanEditMultipleObjects]
 public class NPCAIHubEditor : Editor
 {
+	// foldouts
+	bool foldProfile = true;
 	bool foldDialogue = true;
 	bool foldMovement = true;
+	bool foldFollow = false;
 	bool foldWander = false;
+	bool foldInteractive = false;
 	bool foldCommentator = false;
+	bool foldLogs = false;
 
+	// styles
 	GUIStyle _title, _tag, _box, _featureOn, _featureOff;
 	Texture2D _fallbackLogo;
 
-	Editor edDialogueMgr, edSpeechBubble, edProfile;
-	Editor edWalk, edResolve, edInteract, edCommentator, edWander, edAI;
+	// cached editors
+	Editor edProfile, edDialogueMgr, edSpeechBubble;
+	Editor edWalk, edFollow, edResolve, edInteract;
+	Editor edCommentator, edWander, edAI;
 	Editor edTalkStart, edTalkDuring, edTalkFinish;
+
+	bool _stylesBuilt;
+	string commandInput = "";
+
 
 	void OnEnable()
 	{
@@ -27,31 +39,16 @@ public class NPCAIHubEditor : Editor
 
 	void OnDisable()
 	{
-		edDialogueMgr = null;
-		edSpeechBubble = null;
-		edProfile = null;
-		edWalk = null;
-		edResolve = null;
-		edInteract = null;
-		edCommentator = null;
-		edWander = null;
-		edAI = null;
-		edTalkStart = null;
-		edTalkDuring = null;
-		edTalkFinish = null;
+		edProfile = edDialogueMgr = edSpeechBubble = null;
+		edWalk = edFollow = edResolve = edInteract = null;
+		edCommentator = edWander = edAI = null;
+		edTalkStart = edTalkDuring = edTalkFinish = null;
 	}
-
-	bool _stylesBuilt;
 
 	public override void OnInspectorGUI()
 	{
-		if (!_stylesBuilt)
-		{
-			BuildStyles();
-			_stylesBuilt = true;
-		}
-		if (target == null) return;
-		if (serializedObject == null) return;
+		if (!_stylesBuilt) { BuildStyles(); _stylesBuilt = true; }
+		if (target == null || serializedObject == null) return;
 
 		serializedObject.Update();
 		var hub = target as NPCAIHub;
@@ -59,8 +56,41 @@ public class NPCAIHubEditor : Editor
 
 		DrawHeader(hub);
 		DrawFeaturesBar(hub);
+		EditorGUILayout.Space(8);
+		DrawCommandConsole(hub);
 		EditorGUILayout.Space(6);
 
+		// ===== ANIMATION =====
+		using (new EditorGUILayout.VerticalScope(_box))
+		{
+			EditorGUILayout.LabelField("Animator", _tag);
+			EditorGUILayout.PropertyField(serializedObject.FindProperty("animator"));
+
+			EditorGUILayout.Space(2);
+			EditorGUILayout.LabelField("Bool Parameters (optional)", EditorStyles.miniBoldLabel);
+			EditorGUILayout.PropertyField(serializedObject.FindProperty("walkBool"));
+			EditorGUILayout.PropertyField(serializedObject.FindProperty("talkBool"));
+			EditorGUILayout.PropertyField(serializedObject.FindProperty("interactBool"));
+			EditorGUILayout.PropertyField(serializedObject.FindProperty("followBool"));
+			EditorGUILayout.PropertyField(serializedObject.FindProperty("waitBool"));
+			EditorGUILayout.PropertyField(serializedObject.FindProperty("wanderBool"));
+		}
+
+		// ===== PROFILE =====
+		foldProfile = DrawSectionHeader("Dialogue.Profile", foldProfile);
+		if (foldProfile)
+		{
+			using (new EditorGUILayout.VerticalScope(_box))
+			{
+				var prof = FindFlat<NPCProfile>(hub, "Dialogue.Profile");
+				if (prof != null)
+				{
+					EditorGUILayout.LabelField("NPC Profile", _tag);
+					CreateCachedEditorSafe(prof, ref edProfile);
+					edProfile?.OnInspectorGUI();
+				}
+			}
+		}
 
 		// ===== DIALOGUE =====
 		if (hub.featureDialogue)
@@ -70,14 +100,6 @@ public class NPCAIHubEditor : Editor
 			{
 				using (new EditorGUILayout.VerticalScope(_box))
 				{
-					var prof = FindFlat<NPCProfile>(hub, "Dialogue.Profile");
-					if (prof != null)
-					{
-						EditorGUILayout.LabelField("Profile", _tag);
-						CreateCachedEditorSafe(prof, ref edProfile);
-						edProfile?.OnInspectorGUI();
-					}
-
 					var bubble = FindFlat<NPCSpeechBubble>(hub, "Dialogue.SpeechBubble");
 					if (bubble != null)
 					{
@@ -131,25 +153,28 @@ public class NPCAIHubEditor : Editor
 					var ai = FindFlat<NPCAI>(hub, "Core.AI");
 					if (ai != null)
 					{
-						EditorGUILayout.LabelField("NPCAI", _tag);
-						CreateCachedEditorSafe(ai, ref edAI);
-						edAI?.OnInspectorGUI();
+						EditorGUILayout.LabelField("NPCAI (Movement)", _tag);
+						ai.allowMovement = EditorGUILayout.Toggle("Allow Movement", ai.allowMovement);
+						ai.taskMode = (NPCAI.TaskMode)EditorGUILayout.EnumPopup("Task Mode", ai.taskMode);
 					}
+				}
+			}
+		}
 
-					var resolve = FindFlat<ResolveTargetAuto>(hub, "Interact.ResolveAndUse");
-					if (resolve != null)
+		// ===== FOLLOW =====
+		if (hub.featureFollow)
+		{
+			foldFollow = DrawSectionHeader("Follow", foldFollow);
+			if (foldFollow)
+			{
+				using (new EditorGUILayout.VerticalScope(_box))
+				{
+					var follow = FindFlat<FollowAction>(hub, "Follow.Module");
+					if (follow != null)
 					{
-						EditorGUILayout.LabelField("Resolve Target", _tag);
-						CreateCachedEditorSafe(resolve, ref edResolve);
-						edResolve?.OnInspectorGUI();
-
-						var inter = resolve.GetComponent<InteractAction>();
-						if (inter != null)
-						{
-							EditorGUILayout.LabelField("Interact Action", _tag);
-							CreateCachedEditorSafe(inter, ref edInteract);
-							edInteract?.OnInspectorGUI();
-						}
+						EditorGUILayout.LabelField("FollowAction", _tag);
+						CreateCachedEditorSafe(follow, ref edFollow);
+						edFollow?.OnInspectorGUI();
 					}
 				}
 			}
@@ -169,6 +194,33 @@ public class NPCAIHubEditor : Editor
 						EditorGUILayout.LabelField("NPCWander", _tag);
 						CreateCachedEditorSafe(wz, ref edWander);
 						edWander?.OnInspectorGUI();
+					}
+				}
+			}
+		}
+
+		// ===== INTERACTIVE =====
+		if (hub.featureInteractive)
+		{
+			foldInteractive = DrawSectionHeader("Interactive", foldInteractive);
+			if (foldInteractive)
+			{
+				using (new EditorGUILayout.VerticalScope(_box))
+				{
+					var resolve = FindFlat<ResolveTargetAuto>(hub, "Interact.ResolveAndUse");
+					if (resolve != null)
+					{
+						EditorGUILayout.LabelField("Resolve Target", _tag);
+						CreateCachedEditorSafe(resolve, ref edResolve);
+						edResolve?.OnInspectorGUI();
+
+						var inter = resolve.GetComponent<InteractAction>();
+						if (inter != null)
+						{
+							EditorGUILayout.LabelField("Interact Action", _tag);
+							CreateCachedEditorSafe(inter, ref edInteract);
+							edInteract?.OnInspectorGUI();
+						}
 					}
 				}
 			}
@@ -215,7 +267,6 @@ public class NPCAIHubEditor : Editor
 				}
 			}
 		}
-
 		serializedObject.ApplyModifiedProperties();
 	}
 
@@ -229,15 +280,9 @@ public class NPCAIHubEditor : Editor
 
 	void CreateCachedEditorSafe(Object targetObj, ref Editor editor)
 	{
-		if (targetObj == null)
-		{
-			if (editor != null) editor = null;
-			return;
-		}
+		if (targetObj == null) { editor = null; return; }
 		if (editor == null || editor.target != targetObj)
-		{
 			CreateCachedEditor(targetObj, null, ref editor);
-		}
 	}
 
 	bool DrawSectionHeader(string title, bool expanded)
@@ -255,18 +300,25 @@ public class NPCAIHubEditor : Editor
 
 	void DrawHeader(NPCAIHub hub)
 	{
-		var rect = EditorGUILayout.GetControlRect(false, 72);
-		using (new GUI.GroupScope(rect))
-		{
-			EditorGUI.DrawRect(rect, new Color(0.13f, 0.13f, 0.13f, EditorGUIUtility.isProSkin ? 0.9f : 0.6f));
-			var logo = hub.logo ? hub.logo : _fallbackLogo;
-			var logoRect = new Rect(rect.x + 10, rect.y + 8, 56, 56);
-			if (logo) GUI.DrawTexture(logoRect, logo, ScaleMode.ScaleToFit, true);
-			var titleRect = new Rect(logoRect.xMax + 8, rect.y + 8, rect.width - logoRect.width - 18, 24);
-			GUI.Label(titleRect, "NPCAI Hub — One-Click Controller", _title);
-			var subRect = new Rect(logoRect.xMax + 8, rect.y + 32, rect.width - logoRect.width - 18, 20);
-			GUI.Label(subRect, "Quick setup of all modules in one inspector", EditorStyles.miniLabel);
-		}
+		var rect = GUILayoutUtility.GetRect(GUIContent.none, GUIStyle.none,
+										GUILayout.Height(72), GUILayout.ExpandWidth(true));
+
+		EditorGUI.DrawRect(rect, new Color(0.13f, 0.13f, 0.13f,
+			EditorGUIUtility.isProSkin ? 0.9f : 0.6f));
+
+		var logo = hub.logo ? hub.logo : _fallbackLogo;
+		var logoRect = new Rect(rect.x + 10, rect.y + 8, 56, 56);
+		if (logo) GUI.DrawTexture(logoRect, logo, ScaleMode.ScaleToFit, true);
+
+		var titleRect = new Rect(logoRect.xMax + 8, rect.y + 8,
+								 rect.width - logoRect.width - 18, 36);
+		GUI.Label(titleRect, "NPCAI Hub — One-Click Controller", _title);
+
+		var subRect = new Rect(logoRect.xMax + 8, rect.y + 32,
+							   rect.width - logoRect.width - 18, 28);
+		GUI.Label(subRect, "Quick setup of all modules in one inspector", EditorStyles.miniLabel);
+		EditorGUILayout.Space(6);
+
 	}
 
 	void DrawFeaturesBar(NPCAIHub hub)
@@ -276,13 +328,19 @@ public class NPCAIHubEditor : Editor
 			EditorGUILayout.LabelField("Functions", _tag);
 			using (new EditorGUILayout.HorizontalScope())
 			{
-				ToggleFeatureProp("Dialogue", "featureDialogue", "d_AudioSource Icon", "Dialogue", () => hub.PerformOneClickSetup());
 				ToggleFeatureProp("Movement", "featureMovement", "d_NavMeshAgent Icon", "Movement", () => hub.PerformOneClickSetup());
+				ToggleFeatureProp("Wander", "featureWander", "d_NavMeshObstacle Icon", "Wander", () => hub.PerformOneClickSetup());
+				ToggleFeatureProp("Follow", "featureFollow", "d_StepButton", "Follow module", () => hub.PerformOneClickSetup());
+				ToggleFeatureProp("Interactive", "featureInteractive", "d_ToolHandleLocal", "Interactive", () => hub.PerformOneClickSetup());
 			}
 			using (new EditorGUILayout.HorizontalScope())
 			{
-				ToggleFeatureProp("Wander", "featureWander", "d_NavMeshObstacle Icon", "Wander", () => hub.PerformOneClickSetup());
+				ToggleFeatureProp("Dialogue", "featureDialogue", "d_AudioSource Icon", "Dialogue", () => hub.PerformOneClickSetup());
 				ToggleFeatureProp("Commentator", "featureCommentator", "d_Profiler.Audio", "Commentator", () => hub.PerformOneClickSetup());
+				ToggleFeatureProp("Logs", "featureLogs", "d_UnityEditor.ConsoleWindow", "Logging", () => hub.PerformOneClickSetup());
+			}
+			using (new EditorGUILayout.HorizontalScope())
+			{
 				GUILayout.FlexibleSpace();
 			}
 		}
@@ -292,7 +350,6 @@ public class NPCAIHubEditor : Editor
 	{
 		var prop = serializedObject.FindProperty(propPath);
 		bool value = prop != null && prop.boolValue;
-
 		var icon = EditorGUIUtility.IconContent(iconName).image;
 		var content = new GUIContent(label, icon, tooltip);
 		var style = value ? _featureOn : _featureOff;
@@ -304,8 +361,41 @@ public class NPCAIHubEditor : Editor
 			Undo.RecordObject(target, $"Toggle {label}");
 			if (prop != null) prop.boolValue = newVal;
 			serializedObject.ApplyModifiedProperties();
-			EditorUtility.SetDirty(target); 
+			EditorUtility.SetDirty(target);
 			onAfterApply?.Invoke();
+		}
+	}
+
+	
+
+	void DrawCommandConsole(NPCAIHub hub)
+	{
+		using (new EditorGUILayout.VerticalScope(_box))
+		{
+			EditorGUILayout.LabelField("Command Console", _tag);
+			using (new EditorGUILayout.HorizontalScope())
+			{
+				commandInput = EditorGUILayout.TextField(commandInput);
+				if (GUILayout.Button("Run", GUILayout.Width(60)))
+				{
+					RunForSelectedHubs(h =>
+					{
+						Undo.RecordObject(h, "Execute Command");
+						h.ExecuteCommand(commandInput);
+						EditorUtility.SetDirty(h);
+					});
+				}
+			}
+		}
+	}
+
+	void RunForSelectedHubs(System.Action<NPCAIHub> action)
+	{
+		foreach (var obj in targets)
+		{
+			var hub = obj as NPCAIHub;
+			if (!hub) continue;
+			action?.Invoke(hub);
 		}
 	}
 

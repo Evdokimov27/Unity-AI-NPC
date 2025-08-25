@@ -1,4 +1,3 @@
-// DialogueAction.cs (NEW)
 using System;
 using UnityEngine;
 

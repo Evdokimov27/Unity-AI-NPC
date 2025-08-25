@@ -5,21 +5,18 @@ using UnityEngine;
 [DisallowMultipleComponent]
 public class NPCDialogueManager : MonoBehaviour
 {
-	// ===== LLM / Presentation =====
 	[Header("LLM & Presentation")]
 	[SerializeField] private ChatGPTClient client;
 	[SerializeField] public NPCProfile npc;
 	public NPCSpeechBubble _bubble;
 
-	// ===== Proximity Chat =====
 	[Header("Proximity Chat")]
 	public bool enableProximityDialogue = true;
 	[Min(0.5f)] public float chatRange = 3.0f;
 	[Min(0.5f)] public float chatCooldown = 20f;
-	[Range(0f, 1f)] public float chatStartChance = 0.6f; // при 1.0f разговор стартует всегда
+	[Range(0f, 1f)] public float chatStartChance = 0.6f;
 	public LayerMask npcLayer = ~0;
 
-	// ===== Dialogue Flow =====
 	[Header("Dialogue Flow")]
 	public int minTurns = 3;
 	public int maxTurns = 6;
@@ -29,31 +26,28 @@ public class NPCDialogueManager : MonoBehaviour
 	[Min(0.5f)] public float askTimeout = 3.0f;
 	[Min(30f)] public float faceTurnSpeed = 360f;
 
-	// ===== Movement control during chat =====
 	[Header("Movement control during chat")]
-	[Tooltip("Если включено, NPC временно перестанут двигаться (Wander/NavMeshAgent) на время диалога.")]
+	[Tooltip("If enabled, NPCs will temporarily stop moving (Wander/NavMeshAgent) for the duration of the dialogue.")]
 	public bool agentStopDuringChat = true;
 
-	// ===== Content =====
 	[Header("Content")]
 	public List<string> dialogTopics = new List<string> { "weather", "city", "work", "food", "music", "news", "sports" };
 	public List<string> farewellPhrases = new List<string> { "See you!", "Bye!", "Catch you later.", "Have a good day!" };
 
-	// ===== Runtime state =====
+	[HideInInspector] public Animator animator;
+	[HideInInspector] public string talkBool = "isTalking";
+
 	readonly Collider[] _overlap = new Collider[16];
 	float _lastChatTime = -999f;
 	bool _inDialogue;
 
-	// own movement refs
 	NPCWander _wander;
 	UnityEngine.AI.NavMeshAgent _agent;
 
-	// partner refs
 	NPCDialogueManager _currentPartner;
 	NPCWander _partnerWander;
 	UnityEngine.AI.NavMeshAgent _partnerAgent;
 
-	// movement pause state
 	bool _disabledWander = false;
 	bool _partnerDisabledWander = false;
 	bool _myPrevStopped = false;
@@ -61,7 +55,6 @@ public class NPCDialogueManager : MonoBehaviour
 
 	void Awake()
 	{
-		// Ищем по всему корню NPC, чтобы достать соседние компоненты
 		var root = transform.root;
 		_wander = root.GetComponentInChildren<NPCWander>(true);
 		_agent = root.GetComponentInChildren<UnityEngine.AI.NavMeshAgent>(true);
@@ -72,8 +65,6 @@ public class NPCDialogueManager : MonoBehaviour
 		if (enableProximityDialogue && !_inDialogue)
 			TryFindPartnerAndChat();
 	}
-
-	// ===== Public API =====
 
 	public void ShowBubble(string line)
 	{
@@ -87,6 +78,10 @@ public class NPCDialogueManager : MonoBehaviour
 			Debug.LogError("NPCDialogueManager: Missing ChatGPTClient or NPCProfile.");
 			return;
 		}
+
+		// 🔥 включаем анимацию разговора
+		if (animator && !string.IsNullOrWhiteSpace(talkBool))
+			animator.SetBool(talkBool, true);
 
 		string description =
 			$"Name: {npc.npcName}\n" +
@@ -103,16 +98,31 @@ public class NPCDialogueManager : MonoBehaviour
 		client.Ask(systemPrompt, userPrompt, (reply) =>
 		{
 			ShowBubble(reply);
+
+			// 🔥 выключаем после ответа
+			if (animator && !string.IsNullOrWhiteSpace(talkBool))
+				animator.SetBool(talkBool, false);
 		});
 	}
 
 	public void ClientAsk(string systemPrompt, string userPrompt, System.Action<string> onReply)
 	{
 		if (!client || !npc) { onReply?.Invoke(null); return; }
-		client.Ask(systemPrompt, userPrompt, reply => onReply?.Invoke(reply));
+
+		// 🔥 включаем анимацию на время вопроса
+		if (animator && !string.IsNullOrWhiteSpace(talkBool))
+			animator.SetBool(talkBool, true);
+
+		client.Ask(systemPrompt, userPrompt, reply =>
+		{
+			onReply?.Invoke(reply);
+
+			// 🔥 выключаем анимацию
+			if (animator && !string.IsNullOrWhiteSpace(talkBool))
+				animator.SetBool(talkBool, false);
+		});
 	}
 
-	/// <summary>Принудительно завершает текущий proximity‑диалог и возобновляет движение у обоих собеседников.</summary>
 	public void ForceStopDialogue()
 	{
 		if (!_inDialogue) return;
@@ -122,7 +132,10 @@ public class NPCDialogueManager : MonoBehaviour
 		_lastChatTime = Time.time;
 		if (_bubble) _bubble.ShowText("");
 
-		// резюмим движение
+		// 🔥 выключаем анимацию
+		if (animator && !string.IsNullOrWhiteSpace(talkBool))
+			animator.SetBool(talkBool, false);
+
 		ResumeMovementSelf();
 		ResumeMovementPartner();
 
@@ -130,9 +143,6 @@ public class NPCDialogueManager : MonoBehaviour
 		_partnerWander = null;
 		_partnerAgent = null;
 	}
-
-	// ===== Proximity logic (перенесено из Wander) =====
-
 	void TryFindPartnerAndChat()
 	{
 		if (Time.time - _lastChatTime < chatCooldown) return;
@@ -154,33 +164,34 @@ public class NPCDialogueManager : MonoBehaviour
 			if (other._inDialogue) continue;
 			if (Time.time - other._lastChatTime < other.chatCooldown) continue;
 
-			// Если шанс = 1, всегда стартуем. Иначе — обычная проверка.
 			if (chatStartChance < 1f && Random.value > Mathf.Clamp01(chatStartChance)) continue;
 
 			StartCoroutine(RunDialogueWith(other));
 			return;
 		}
 	}
-
 	IEnumerator RunDialogueWith(NPCDialogueManager partner)
 	{
-		// пометим состояние
 		_inDialogue = true;
 		partner._inDialogue = true;
 		_lastChatTime = Time.time;
 		partner._lastChatTime = Time.time;
 
-		// сохраним ссылки (по корням), чтобы уметь замораживать движение
 		_currentPartner = partner;
 		EnsureSelfRefs();
 		EnsurePartnerRefs();
 
-		// остановим движение на время разговора, если надо
 		if (agentStopDuringChat)
 		{
 			PauseMovementSelf();
 			PauseMovementPartner();
 		}
+
+		// 🔥 включаем анимацию обоим собеседникам
+		if (animator && !string.IsNullOrWhiteSpace(talkBool))
+			animator.SetBool(talkBool, true);
+		if (partner.animator && !string.IsNullOrWhiteSpace(partner.talkBool))
+			partner.animator.SetBool(partner.talkBool, true);
 
 		string topic = (dialogTopics != null && dialogTopics.Count > 0)
 			? dialogTopics[Random.Range(0, dialogTopics.Count)]
@@ -216,8 +227,6 @@ public class NPCDialogueManager : MonoBehaviour
 				partner.ShowBubble(lastB);
 			}
 
-			
-
 			float dur = Mathf.Clamp(((speakerIsA ? lastA : lastB)?.Length ?? 0) * secondsPerCharacter, minTurnDuration, maxTurnDuration);
 			float end = Time.time + dur;
 			while (Time.time < end)
@@ -228,7 +237,6 @@ public class NPCDialogueManager : MonoBehaviour
 			}
 		}
 
-		// прощальная реплика
 		{
 			bool lastIsA = ((turns - 1) % 2 == 0);
 			var speaker = lastIsA ? this : partner;
@@ -239,12 +247,17 @@ public class NPCDialogueManager : MonoBehaviour
 			speaker.ShowBubble(bye);
 		}
 
-		// резюмим движение
 		if (agentStopDuringChat)
 		{
 			ResumeMovementSelf();
 			ResumeMovementPartner();
 		}
+
+		// 🔥 выключаем анимацию после разговора
+		if (animator && !string.IsNullOrWhiteSpace(talkBool))
+			animator.SetBool(talkBool, false);
+		if (partner.animator && !string.IsNullOrWhiteSpace(partner.talkBool))
+			partner.animator.SetBool(partner.talkBool, false);
 
 		_inDialogue = false;
 		partner._inDialogue = false;

@@ -10,7 +10,7 @@ using UnityEngine.AI;
 public class NPCAI : MonoBehaviour
 {
 	public enum TaskMode { Auto, MoveOnly, MoveAndInteract }
-	public enum HighLevelIntent { MoveOnly, MoveAndInteract, Dialogue, Wait }
+	public enum HighLevelIntent { MoveOnly, MoveAndInteract, Dialogue, Wait, Follow }
 
 	[Header("References")]
 	public NavMeshAgent agent;
@@ -20,6 +20,15 @@ public class NPCAI : MonoBehaviour
 	public InteractAction interactStep;
 	public WaitAction waitStep;
 	public DialogueAction dialogueStep;
+	public FollowAction followStep;
+
+	public Animator animator;
+	public string walkBool = "isWalking";
+	public string talkBool = "isTalking";
+	public string interactBool = "isInteracting";
+	public string followBool = "isFollowing";
+	public string waitBool = "isWaiting";
+	public string wanderBool = "isWander";
 
 	public NPCDialogueManager dialogueManager;
 	public NPCActionCommentator commentator;
@@ -56,6 +65,14 @@ public class NPCAI : MonoBehaviour
 		entries = new[] { "wait", "hold", "stay", "stand", "подожди", "жди", "стой", "постой", "замри" },
 		minSimilarity = 0.78f
 	};
+	public KeywordSet followKeywords = new KeywordSet
+	{
+		entries = new[] {
+			"follow","follow me","follow him","follow her","stick to","tail","shadow",
+			"следуй","иди за","преследуй","следи за","держись рядом","иди за мной","за мной"
+		},
+		minSimilarity = 0.75f
+	};
 
 	public bool useLLMIntent = true;
 	public ChatGPTClient intentClient;
@@ -72,7 +89,10 @@ public class NPCAI : MonoBehaviour
 	private IActionStep _currentStep;
 	private ActionContext _ctx;
 	private HighLevelIntent _intent;
-	private NPCWander _wander;
+	public NPCWander _wander;
+
+	public HighLevelIntent CurrentIntent => _intent;
+	public bool IsFollowing => _intent == HighLevelIntent.Follow;
 
 	private void Reset()
 	{
@@ -84,36 +104,97 @@ public class NPCAI : MonoBehaviour
 		dialogueManager = GetComponent<NPCDialogueManager>();
 		waitStep = GetComponent<WaitAction>();
 		dialogueStep = GetComponent<DialogueAction>();
+		followStep = GetComponent<FollowAction>();
 		_wander = GetComponent<NPCWander>();
 	}
 
 	private void Awake()
 	{
 		if (!_wander) _wander = GetComponent<NPCWander>();
+		if (!followStep) followStep = GetComponent<FollowAction>();
 	}
 
 	private void Update()
 	{
-		if (_currentStep != null && _ctx != null) _currentStep.Tick(_ctx);
+		if (_currentStep != null && _ctx != null)
+			_currentStep.Tick(_ctx);
+
+		UpdateMovementAnimation();
 	}
+	private void UpdateMovementAnimation()
+	{
+		if (!animator || agent == null || !agent.enabled || !agent.isOnNavMesh)
+			return;
+
+		bool isMoving = agent.velocity.sqrMagnitude > 0.01f && !agent.isStopped;
+
+		SetBoolIfNotEmpty(walkBool, false);
+		SetBoolIfNotEmpty(followBool, false);
+		SetBoolIfNotEmpty(wanderBool, false);
+
+		if (!isMoving)
+		{
+			if (verboseLogs) Debug.Log("Anim: agent NOT moving, all movement flags off.");
+			return;
+		}
+
+		if (_currentStep is WalkAction)
+		{
+			if (verboseLogs) Debug.Log("Anim: WalkAction active → " + walkBool);
+			SetBoolIfNotEmpty(walkBool, true);
+		}
+		else if (_currentStep is FollowAction)
+		{
+			if (verboseLogs) Debug.Log("Anim: FollowAction active → " + followBool);
+			SetBoolIfNotEmpty(followBool, true);
+		}
+		else
+		{
+			if (_wander && _wander.isActiveAndEnabled)
+			{
+				if (!_wander.IsAutonomySuspended)
+				{
+					if (verboseLogs) Debug.Log("Anim: Wander active → " + wanderBool);
+					SetBoolIfNotEmpty(wanderBool, true);
+				}
+				else
+				{
+					if (verboseLogs) Debug.Log("Anim: Wander found, but autonomy suspended.");
+				}
+			}
+			else
+			{
+				if (verboseLogs) Debug.Log("Anim: No Wander running." + " " + _wander);
+			}
+		}
+	}
+
+
 
 	public void GoTo(string userCommand)
 	{
-		if (_currentStep is DialogueAction || _currentStep is TalkAction)
+		if (verboseLogs) Debug.Log($"NPCAI: start command — \"{userCommand}\"");
+
+		StopAllCoroutines();
+		if (_currentStep != null)
 		{
 			try { _currentStep.Cancel(_ctx); } catch { }
 			_currentStep = null;
 		}
-
-		if (dialogueManager != null)
+		SuspendWander(true);
+		try
 		{
-			dialogueManager.ForceStopDialogue();
+			if (talkDuringMove && talkDuringMove.enabled && talkDuringMove.mode == TalkAction.TalkMode.GenerateLoop)
+				talkDuringMove.Cancel(_ctx);
+			if (talkOnStartMove && talkOnStartMove.enabled)
+				talkOnStartMove.Cancel(_ctx);
+			if (talkOnFinish && talkOnFinish.enabled)
+				talkOnFinish.Cancel(_ctx);
+			if (dialogueManager) dialogueManager.ForceStopDialogue();
 		}
-		if (verboseLogs) Debug.Log($"NPCAI: start command — \"{userCommand}\"");
-		_ctx = new ActionContext(gameObject);
-		_ctx.userCommand = userCommand ?? string.Empty;
+		catch { }
 
-		StopAllCoroutines();
+		_ctx = new ActionContext(gameObject) { userCommand = userCommand ?? string.Empty };
 		StartCoroutine(RunPipeline());
 	}
 
@@ -132,15 +213,9 @@ public class NPCAI : MonoBehaviour
 			if (verboseLogs) Debug.Log("NPCAI: waiting for LLM intent...");
 			HighLevelIntent? llm = null;
 			yield return InferIntentLLM(_ctx.userCommand, _ctx.blackboard, r => llm = r);
-			if (llm.HasValue)
-			{
-				_intent = llm.Value;
-				gotLLM = true;
-				if (verboseLogs) Debug.Log($"NPCAI: LLM intent -> {_intent} (wait={GetWait():0.##}s)");
-			}
-			else if (verboseLogs) Debug.Log("NPCAI: LLM intent not available (timeout/empty). Using keyword fallback.");
+			if (llm.HasValue) { _intent = llm.Value; gotLLM = true; if (verboseLogs) Debug.Log($"NPCAI: LLM intent -> {_intent} (wait={_ctx.waitSeconds:0.##}s)"); }
+			else if (verboseLogs) Debug.Log("NPCAI: LLM intent failed/timeout. Using keyword fallback.");
 		}
-
 		if (!gotLLM)
 		{
 			_intent = DecideIntent(_ctx.userCommand, out float waitSec, out string dialogText);
@@ -150,15 +225,9 @@ public class NPCAI : MonoBehaviour
 		}
 
 		if (_intent == HighLevelIntent.Dialogue && !allowDialogue)
-		{
-			if (verboseLogs) Debug.Log("NPCAI: Dialogue intent blocked by Hub (featureDialogue=false).");
-			SuspendWander(false); yield break;
-		}
-		if ((_intent == HighLevelIntent.MoveOnly || _intent == HighLevelIntent.MoveAndInteract) && !allowMovement)
-		{
-			if (verboseLogs) Debug.Log("NPCAI: Movement intent blocked by Hub (featureMovement=false).");
-			SuspendWander(false); yield break;
-		}
+		{ if (verboseLogs) Debug.Log("NPCAI: Dialogue blocked by Hub."); SuspendWander(false); yield break; }
+		if ((_intent == HighLevelIntent.MoveOnly || _intent == HighLevelIntent.MoveAndInteract || _intent == HighLevelIntent.Follow) && !allowMovement)
+		{ if (verboseLogs) Debug.Log("NPCAI: Movement blocked by Hub."); SuspendWander(false); yield break; }
 
 		if (_intent == HighLevelIntent.Dialogue)
 		{
@@ -180,10 +249,6 @@ public class NPCAI : MonoBehaviour
 		}
 
 		if (!agent) { Debug.LogError("NPCAI: NavMeshAgent not set."); SuspendWander(false); yield break; }
-		if (!walkStep) { Debug.LogError("NPCAI: WalkAction not set."); SuspendWander(false); yield break; }
-
-		bool needInteract = (_intent == HighLevelIntent.MoveAndInteract);
-		if (needInteract && !interactStep) { Debug.LogError("NPCAI: InteractAction missing."); SuspendWander(false); yield break; }
 
 		if (resolveStep)
 		{
@@ -194,12 +259,33 @@ public class NPCAI : MonoBehaviour
 			if (taskMode == TaskMode.Auto)
 			{
 				bool? refined = DecideFromBlackboard(_ctx.blackboard, _ctx.userCommand);
-				if (refined.HasValue) needInteract = refined.Value;
+				if (refined.HasValue && _intent != HighLevelIntent.Follow)
+					_intent = refined.Value ? HighLevelIntent.MoveAndInteract : HighLevelIntent.MoveOnly;
 			}
 
-			if (!ok && stopOnFirstFail) { if (verboseLogs) Debug.LogWarning("NPCAI: target not resolved — stopping."); SuspendWander(false); yield break; }
-			if (needInteract && !interactStep) { Debug.LogError("NPCAI: InteractAction required but missing."); SuspendWander(false); yield break; }
+			if (!ok && stopOnFirstFail && _intent != HighLevelIntent.Follow)
+			{
+				if (verboseLogs) Debug.LogWarning("NPCAI: target not resolved — stopping.");
+				SuspendWander(false); yield break;
+			}
 		}
+
+		if (_intent == HighLevelIntent.Follow)
+		{
+			if (!followStep)
+			{
+				Debug.LogError("NPCAI: FollowAction missing.");
+				SuspendWander(false); yield break;
+			}
+
+			bool ok = false; 
+			if (verboseLogs) Debug.Log("NPCAI: FollowAction...");
+			yield return RunStep(followStep, r => ok = r);
+			SuspendWander(false); yield break;
+		}
+
+		if (!walkStep) { Debug.LogError("NPCAI: WalkAction not set."); SuspendWander(false); yield break; }
+		bool needInteract = (_intent == HighLevelIntent.MoveAndInteract);
 
 		if (_ctx.explicitTarget && commentator) commentator.CommentOnAction("Walk", _ctx.explicitTarget);
 		if (talkOnStartMove) SafeBegin(talkOnStartMove, "TalkOnStartMove");
@@ -210,15 +296,24 @@ public class NPCAI : MonoBehaviour
 		yield return RunStep(walkStep, r => walkOk = r);
 
 		if (talkDuringMove && talkDuringMove.mode == TalkAction.TalkMode.GenerateLoop) talkDuringMove.Cancel(_ctx);
-		if (!walkOk && stopOnFirstFail) { if (verboseLogs) Debug.LogWarning("NPCAI: failed to reach the target."); SuspendWander(false); yield break; }
+		if (!walkOk && stopOnFirstFail)
+		{
+			if (verboseLogs) Debug.LogWarning("NPCAI: failed to reach the target.");
+			SuspendWander(false); yield break;
+		}
 
 		if (needInteract)
 		{
+			if (!interactStep) { Debug.LogError("NPCAI: InteractAction missing."); SuspendWander(false); yield break; }
 			if (_ctx.explicitTarget && commentator) commentator.CommentOnAction("Interact", _ctx.explicitTarget);
 			bool interOk = false;
 			if (verboseLogs) Debug.Log("NPCAI: InteractAction...");
 			yield return RunStep(interactStep, r => interOk = r);
-			if (!interOk && stopOnFirstFail) { if (verboseLogs) Debug.LogWarning("NPCAI: interaction failed."); SuspendWander(false); yield break; }
+			if (!interOk && stopOnFirstFail)
+			{
+				if (verboseLogs) Debug.LogWarning("NPCAI: interaction failed.");
+				SuspendWander(false); yield break;
+			}
 			if (talkOnFinish) { bool fin = false; yield return RunStep(talkOnFinish, r => fin = r); }
 		}
 
@@ -233,16 +328,63 @@ public class NPCAI : MonoBehaviour
 		bool finished = false, result = false;
 		_currentStep = step;
 		step.Begin(_ctx, ok => { result = ok; finished = true; });
+		ApplyAnimForStep(step);
 		while (!finished) yield return null;
 		_currentStep = null;
+		if (animator) ResetAllAnimationFlags();
+
 		onDone?.Invoke(result);
 	}
-
 	private void SafeBegin(IActionStep step, string label)
 	{
-		try { step.Begin(_ctx, _ => { }); }
-		catch { Debug.LogWarning($"NPCAI: error while starting {label}"); }
+		try
+		{
+			step.Begin(_ctx, _ => { });
+			ApplyAnimForStep(step);
+		}
+		catch
+		{
+			Debug.LogWarning($"NPCAI: error while starting {label}");
+		}
 	}
+	private void SetBoolIfNotEmpty(string param, bool value)
+	{
+		if (!animator) return;
+		if (string.IsNullOrWhiteSpace(param)) return;
+		for (int i = 0; i < animator.parameterCount; i++)
+		{
+			var p = animator.GetParameter(i);
+			if (p.type == AnimatorControllerParameterType.Bool && p.name == param)
+			{
+				animator.SetBool(param, value);
+				break;
+			}
+		}
+	}
+
+	private void ResetAllAnimationFlags()
+	{
+		SetBoolIfNotEmpty(walkBool, false);
+		SetBoolIfNotEmpty(talkBool, false);
+		SetBoolIfNotEmpty(interactBool, false);
+		SetBoolIfNotEmpty(followBool, false);
+		SetBoolIfNotEmpty(waitBool, false);
+		SetBoolIfNotEmpty(wanderBool, false);
+	}
+
+	private void ApplyAnimForStep(IActionStep step)
+	{
+		if (!animator) return;
+
+		SetBoolIfNotEmpty(talkBool, false);
+		SetBoolIfNotEmpty(interactBool, false);
+		SetBoolIfNotEmpty(waitBool, false);
+
+		if (step is TalkAction) SetBoolIfNotEmpty(talkBool, true);
+		else if (step is InteractAction) SetBoolIfNotEmpty(interactBool, true);
+		else if (step is WaitAction) SetBoolIfNotEmpty(waitBool, true);
+	}
+
 
 	private HighLevelIntent DecideIntent(string text, out float waitSeconds, out string dialogText)
 	{
@@ -253,6 +395,12 @@ public class NPCAI : MonoBehaviour
 		{
 			if (!TryParseWaitSeconds(text, out waitSeconds)) waitSeconds = 3f;
 			return HighLevelIntent.Wait;
+		}
+
+		if (followKeywords != null && followKeywords.Matches(text))
+		{
+			TryParseWaitSeconds(text, out waitSeconds); 
+			return HighLevelIntent.Follow;
 		}
 
 		bool hasMove = movementKeywords != null && movementKeywords.Matches(text);
@@ -321,22 +469,16 @@ public class NPCAI : MonoBehaviour
 		string payload = string.Join(" | ", new[] { userCommand, a, c }.Where(s => !string.IsNullOrWhiteSpace(s)));
 
 		string systemPrompt =
-			"You are an intent classifier for NPC commands in a video game. " +
-			"Classify the player's input (any language) into EXACTLY one intent. " +
-			"Respond ONLY with JSON in this schema:\n" +
-			"{ \"intent\":\"move\"|\"interact\"|\"wait\"|\"dialogue\", \"waitSeconds\":<number or 0> }\n" +
+			"You are an intent classifier for NPC commands in a video game.\n" +
+			"Return ONLY JSON with this schema:\n" +
+			"{ \"intent\":\"move\"|\"interact\"|\"wait\"|\"dialogue\"|\"follow\", \"waitSeconds\":<number or 0> }\n" +
 			"Rules:\n" +
-			"- 'move' = navigation only (e.g., 'иди к двери', 'go to the circle').\n" +
-			"- 'interact' = act on something (e.g., 'открой дверь', 'press the button').\n" +
-			"- 'wait' = commands to pause/stand still (e.g., 'подожди 10 секунд', 'стой минуту'). Fill waitSeconds if given.\n" +
-			"- 'dialogue' = questions or talking to the player.\n" +
-			"- Always output JSON only.\n\n" +
-			"Examples:\n" +
-			"Player: \"иди к двери\" → {\"intent\":\"move\",\"waitSeconds\":0}\n" +
-			"Player: \"открой дверь\" → {\"intent\":\"interact\",\"waitSeconds\":0}\n" +
-			"Player: \"подожди 10 секунд\" → {\"intent\":\"wait\",\"waitSeconds\":10}\n" +
-			"Player: \"стой минуту\" → {\"intent\":\"wait\",\"waitSeconds\":60}\n" +
-			"Player: \"поговорим?\" → {\"intent\":\"dialogue\",\"waitSeconds\":0}\n";
+			"- move = navigation only (e.g., 'иди к двери', 'go to X').\n" +
+			"- interact = act on something (e.g., 'открой дверь', 'press the button').\n" +
+			"- wait = pause/stand still (e.g., 'подожди 10 секунд', 'стой минуту'). Use waitSeconds.\n" +
+			"- dialogue = general talk, questions, chat with the player.\n" +
+			"- follow = follow a target (e.g., 'следуй за мной', 'follow the player'). If a duration is specified (e.g., 'follow me 30s'), put it into waitSeconds.\n" +
+			"- Always output JSON only.";
 
 		string userPrompt = "Command: \"" + payload + "\"";
 
@@ -357,6 +499,10 @@ public class NPCAI : MonoBehaviour
 						result = HighLevelIntent.Wait;
 						break;
 					case "dialogue": result = HighLevelIntent.Dialogue; break;
+					case "follow":
+						_ctx.waitSeconds = Mathf.Max(0f, waitSecs);
+						result = HighLevelIntent.Follow; break;
+					default: result = null; break;
 				}
 			}
 			catch { result = null; }

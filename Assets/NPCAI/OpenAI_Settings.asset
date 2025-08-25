@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 604eadbdd7eb3ff44a3a42479cae5d3a, type: 3}
   m_Name: OpenAI_Settings
   m_EditorClassIdentifier: 
-  apiKey: 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
+  apiKey: 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
   model: gpt-4o-mini
   temperature: 0.7
   defaultResponseLanguage: auto
