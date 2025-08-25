@@ -8,9 +8,9 @@ public class TalkAction : MonoBehaviour, IActionStep
 
 	public enum TalkMode
 	{
-		FixedText,       // say fixed line once
-		GenerateOnce,    // ask LLM once from prompt
-		GenerateLoop     // ask LLM periodically while running (until externally completed)
+		FixedText,     
+		GenerateOnce,  
+		GenerateLoop   
 	}
 
 	[Header("Dialogue")]
@@ -56,7 +56,6 @@ public class TalkAction : MonoBehaviour, IActionStep
 			case TalkMode.GenerateLoop:
 				if (!dialogueManager) { Debug.LogWarning("TalkAction: DialogueManager missing."); Finish(false); return; }
 				_timer = 0f;
-				// do not finish here; Tick() will keep asking until someone cancels or a parent composite completes
 				break;
 		}
 	}
@@ -74,7 +73,7 @@ public class TalkAction : MonoBehaviour, IActionStep
 				dialogueManager.ClientAsk(
 					"You are an NPC. One short sentence about the ongoing action.",
 					BuildUserPrompt(context),
-					_ => { /* fire-and-forget */ }
+					_ => { }
 				);
 			}
 		}

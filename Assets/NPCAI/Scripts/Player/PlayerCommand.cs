@@ -65,13 +65,10 @@ public class CommandPlayer : MonoBehaviour
 			var ai = col.GetComponent<NPCAI>() ?? col.GetComponentInParent<NPCAI>() ?? col.GetComponentInChildren<NPCAI>();
 			if (!ai || !ai.enabled || !ai.gameObject.activeInHierarchy) continue;
 
-			// Deduplicate by component
 			if (!seen.Add(ai)) continue;
 
-			// Optional LOS
 			if (requireLineOfSight && !HasLineOfSight(ai.transform)) continue;
 
-			// HARD distance check by NPC position (not by collider)
 			Vector3 npcPos = ai.agent ? ai.agent.transform.position : ai.transform.position;
 			if ((npcPos - transform.position).sqrMagnitude > radius * radius) continue;
 
@@ -84,14 +81,11 @@ public class CommandPlayer : MonoBehaviour
 
 	IEnumerator ConfirmThenRun(NPCAI ai, string command)
 	{
-		// Make NPC face the player
 		FaceTowards(ai.transform, transform);
 
-		// Ensure NPCDialogueManager & ChatGPT client are wired
 		var dm = ai.dialogueManager;
-		EnsureDialogueClient(dm); // will attach Global client if missing
+		EnsureDialogueClient(dm);
 
-		// Per-NPC simple rate-limit to avoid 429
 		int id = ai.GetInstanceID();
 		float lastAt = _npcLastAskAt.TryGetValue(id, out var t0) ? t0 : -999f;
 		float gap = Mathf.Max(0f, perNpcAskGap);
@@ -105,10 +99,8 @@ public class CommandPlayer : MonoBehaviour
 		{
 			string userPrompt = string.Format(confirmationTemplate, command);
 
-			// Ask ChatGPT through NPCDialogueManager (will log and return "" on error)
 			dm.ClientAsk(systemPrompt, userPrompt, reply =>
 			{
-				// Always show something to avoid “silent” failures
 				string finalReply = string.IsNullOrWhiteSpace(reply) ? "Okay, proceeding." : reply;
 				dm.ShowBubble(finalReply);
 				replied = !string.IsNullOrWhiteSpace(reply);
@@ -127,21 +119,18 @@ public class CommandPlayer : MonoBehaviour
 
 		if (postReplyDelay > 0f) yield return new WaitForSeconds(postReplyDelay);
 
-		// Start NPCAI pipeline (ResolveTargetAuto → WalkAction → InteractAction)
 		ai.GoTo(command);
 	}
 
 	void EnsureDialogueClient(NPCDialogueManager dm)
 	{
 		if (!dm) return;
-		// NPCDialogueManager.ClientAsk early-returns if client is null, so wire it if needed:
-		// Use the global scene client (creates one if missing).
-		var global = GlobalChatGPTClient.GetOrCreateClientInScene(); // applies settings via NPCAIOpenAISettings elsewhere
-																	 // Private field 'client' in NPCDialogueManager
+		var global = NPCAI_GlobalClient.GetOrCreateClientInScene(); 
+																	 
 		var f = typeof(NPCDialogueManager).GetField("client", BindingFlags.Instance | BindingFlags.NonPublic);
 		if (f != null)
 		{
-			var current = f.GetValue(dm) as ChatGPTClient;
+			var current = f.GetValue(dm) as MultiAIClient;
 			if (current == null && global != null)
 				f.SetValue(dm, global);
 		}

@@ -2,9 +2,9 @@
 using UnityEngine;
 using UnityEngine.AI;
 using static UnityEngine.Rendering.VolumeComponent;
-
 [ExecuteAlways]
 [DisallowMultipleComponent]
+[RequireComponent(typeof(CapsuleCollider))]
 public class NPCAIHub : MonoBehaviour
 {
 	[Header("Logo")]
@@ -22,6 +22,7 @@ public class NPCAIHub : MonoBehaviour
 
 	[Header("Animation")]
 	public Animator animator;
+	public float speedMovement;
 	public string walkBool = "isWalking";
 	public string talkBool = "isTalking";
 	public string interactBool = "isInteracting";
@@ -54,7 +55,7 @@ public class NPCAIHub : MonoBehaviour
 #if UNITY_EDITOR
 	void OnValidate() { AutoSync(); 
 	if (logo == null)
-				logo = UnityEditor.AssetDatabase.LoadAssetAtPath<Texture2D>("Assets/NPCAI/Icon/icon.png");
+				logo = UnityEditor.AssetDatabase.LoadAssetAtPath<Texture2D>("Assets/NPCAI/Resourses/Icon/icon.png");
 	}
 #endif
 
@@ -66,7 +67,7 @@ public class NPCAIHub : MonoBehaviour
 		try
 		{
 			EnsureOnChild<NPCAI>("Core.AI");
-
+			EnsureSpeedMovement();
 			ApplyAutoDefaults();
 			EnsureHolder(this);
 			EnsureAgentOnRoot();
@@ -154,9 +155,16 @@ public class NPCAIHub : MonoBehaviour
 			if (string.IsNullOrWhiteSpace(p.backstory)) p.backstory = $"This is {p.npcName}.";
 		});
 	}
+	void EnsureSpeedMovement()
+	{
+		EnsureOnChild<NPCAI>("Core.AI", f =>
+		{
+			f.speedMovement = speedMovement;
+		});
+	}
 	void EnsureFollow()
 	{
-		EnsureOnChild<FollowAction>("Follow.Module", f =>
+		EnsureOnChild<FollowAction>("Movement.Follow", f =>
 		{
 			if (f.followDistance <= 0.01f) f.followDistance = 1.75f;
 		});
@@ -183,7 +191,7 @@ public class NPCAIHub : MonoBehaviour
 
 		var bubble = EnsureBubbleFromPrefab("Dialogue.SpeechBubble");
 
-		var client = GlobalChatGPTClient.GetOrCreateClientInScene();
+		var client = NPCAI_GlobalClient.GetOrCreateClientInScene();
 		TrySetField(manager, "client", client);
 		TrySetProperty(manager, "Client", client);
 
@@ -243,8 +251,8 @@ public class NPCAIHub : MonoBehaviour
 		EnsureOnChild<TalkAction>("Movement.TalkDuring", t => { t.mode = TalkAction.TalkMode.GenerateLoop; t.llmPrompt = "Say one short line about walking."; });
 		EnsureOnChild<TalkAction>("Movement.TalkFinish", t => { t.mode = TalkAction.TalkMode.GenerateOnce; t.llmPrompt = "Say one short line after arriving."; });
 
-		EnsureOnChild<ResolveTargetAuto>("Interact.ResolveAndUse");
-		EnsureOnChild<InteractAction>("Interact.ResolveAndUse");
+		EnsureOnChild<ResolveTargetAuto>("Movement.ResolveTarget");   
+		EnsureOnChild<InteractAction>("Interact.ResolveAndUse");      
 	}
 
 
@@ -272,12 +280,14 @@ public class NPCAIHub : MonoBehaviour
 		if (follow) follow.gameObject.SetActive(featureMovement);
 
 		var ai = FindOnChild<NPCAI>("Core.AI");
-		if (ai) ai.gameObject.SetActive(true);
+		if (ai)
+		{
+			ai.gameObject.SetActive(true);
+		}
+		var resolve = FindOnChild<ResolveTargetAuto>("Movement.ResolveTarget");
+		if (resolve) resolve.gameObject.SetActive(featureMovement || featureFollow);
 
-		var resolve = FindOnChild<ResolveTargetAuto>("Interact.ResolveAndUse");
-		if (resolve) resolve.gameObject.SetActive(featureInteractive);
-
-		var inter = resolve ? resolve.GetComponent<InteractAction>() : null;
+		var inter = FindOnChild<InteractAction>("Interact.ResolveAndUse");
 		if (inter) inter.enabled = featureInteractive;
 
 		bool talkOn = featureMovement && featureCommentator;
@@ -334,7 +344,7 @@ public class NPCAIHub : MonoBehaviour
 			f.SetValue(obj, value);
 	}
 
-	void TrySetIntentClient(object obj, ChatGPTClient client)
+	void TrySetIntentClient(object obj, MultiAIClient client)
 	{
 		if (obj == null || client == null) return;
 		TrySetField(obj, "intentClient", client);
@@ -343,7 +353,7 @@ public class NPCAIHub : MonoBehaviour
 		var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
 		foreach (var f in obj.GetType().GetFields(flags))
 		{
-			if (f.FieldType == typeof(ChatGPTClient))
+			if (f.FieldType == typeof(MultiAIClient))
 			{
 				var cur = f.GetValue(obj);
 				if (!Equals(cur, client)) f.SetValue(obj, client);
@@ -362,7 +372,7 @@ public class NPCAIHub : MonoBehaviour
 		TrySetField(ai, "talkDuringMove", talkDuring);
 		TrySetField(ai, "talkOnFinish", talkFinish);
 
-		var globalClient = GlobalChatGPTClient.GetOrCreateClientInScene();
+		var globalClient = NPCAI_GlobalClient.GetOrCreateClientInScene();
 		TrySetIntentClient(ai, globalClient);
 		var resolve = FindOnChild<ResolveTargetAuto>("Interact.ResolveAndUse");
 		TrySetIntentClient(resolve, globalClient);
@@ -374,7 +384,6 @@ public class NPCAIHub : MonoBehaviour
 		if (mgr == null) return;
 		if (mgr)
 		{
-			// проброс Animator и talkBool
 			TrySetField(mgr, "animator", animator);
 			TrySetField(mgr, "talkBool", talkBool);
 		}
@@ -417,6 +426,9 @@ public class NPCAIHub : MonoBehaviour
 			TrySetField(ai, "interactBool", interactBool);
 			TrySetField(ai, "followBool", followBool);
 			TrySetField(ai, "waitBool", waitBool);
+			TrySetField(ai, "speedMovement", speedMovement);
+			TrySetField(ai, "verboseLogs", featureLogs);
+
 			var wander = FindOnChild<NPCWander>("Movement.Wander");
 			if (wander)
 			{
@@ -432,17 +444,22 @@ public class NPCAIHub : MonoBehaviour
 		if (ai && walk) TrySetField(ai, "walkStep", walk);
 
 		var follow = FindOnChild<FollowAction>("Movement.Follow");           
-		if (ai && follow) TrySetField(ai, "followStep", follow);             
+		if (ai && follow) TrySetField(ai, "followStep", follow);
 
-		var resolve = FindOnChild<ResolveTargetAuto>("Interact.ResolveAndUse");
-		if (ai && resolve) TrySetField(ai, "resolveStep", resolve);
+		var resolve = FindOnChild<ResolveTargetAuto>("Movement.ResolveTarget");
+		if (ai && resolve)
+		{
+			TrySetField(ai, "resolveStep", resolve);
+			TrySetField(resolve, "_client", ai.intentClient);
+
+		}
 
 		var comm = FindOnChild<NPCActionCommentator>("Commentator");
 		if (ai) TrySetField(ai, "commentator", comm);
 
 		var mgr = FindOnChild<NPCDialogueManager>("Dialogue.Manager");
 		var prof = FindOnChild<NPCProfile>("Dialogue.Profile");
-		var gpt = GlobalChatGPTClient.GetOrCreateClientInScene();
+		var gpt = NPCAI_GlobalClient.GetOrCreateClientInScene();
 		if (mgr)
 		{
 			TrySetField(mgr, "client", gpt); TrySetProperty(mgr, "Client", gpt);
@@ -454,6 +471,8 @@ public class NPCAIHub : MonoBehaviour
 		var dialogue = FindOnChild<DialogueAction>("Core.Dialogue");
 		if (ai && dialogue) TrySetField(ai, "dialogueStep", dialogue);
 
+		var interact = FindOnChild<InteractAction>("Interact.ResolveAndUse");
+		if (interact) TrySetField(interact, "verboseLogs", featureLogs);
 
 		WireDialogueIntoAll();
 		WireNPCAITalkAndIntent();
@@ -512,13 +531,11 @@ public class NPCAIHub : MonoBehaviour
 
 		ai.allowDialogue = featureDialogue;
 		ai.allowMovement = featureMovement;
+		ai.allowInteractive = featureInteractive;
+		ai.allowFollow = featureFollow;
 
-		var resolve = FindOnChild<ResolveTargetAuto>("Interact.ResolveAndUse");
-		var inter = resolve ? resolve.GetComponent<InteractAction>() : null;
-		if (inter)
-			ai.interactStep = (featureMovement && featureInteractive) ? inter : null;
-		else
-			ai.interactStep = null;
+		var inter = FindOnChild<InteractAction>("Interact.ResolveAndUse");
+		ai.interactStep = (inter && featureInteractive && (featureMovement || featureFollow)) ? inter : null;
 
 		ai.GoTo(userCommand);
 	}

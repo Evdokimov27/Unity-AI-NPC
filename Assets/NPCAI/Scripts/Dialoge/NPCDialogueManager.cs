@@ -6,7 +6,7 @@ using UnityEngine;
 public class NPCDialogueManager : MonoBehaviour
 {
 	[Header("LLM & Presentation")]
-	[SerializeField] private ChatGPTClient client;
+	[SerializeField] private MultiAIClient client;
 	[SerializeField] public NPCProfile npc;
 	public NPCSpeechBubble _bubble;
 
@@ -53,6 +53,20 @@ public class NPCDialogueManager : MonoBehaviour
 	bool _myPrevStopped = false;
 	bool _partnerPrevStopped = false;
 
+	bool _hadPath;
+	Vector3 _savedDestination;
+
+	bool _partnerHadPath;
+	Vector3 _partnerSavedDestination;
+
+	bool _wanderAutonomyHeldByDialogue = false;
+	bool _partnerAutonomyHeldByDialogue = false;
+
+	public bool IsInDialogue => _inDialogue;
+
+	public event System.Action<NPCDialogueManager> DialogueStarted;
+	public event System.Action<NPCDialogueManager> DialogueFinished;
+
 	void Awake()
 	{
 		var root = transform.root;
@@ -71,35 +85,55 @@ public class NPCDialogueManager : MonoBehaviour
 		if (_bubble != null) _bubble.ShowText(line);
 	}
 
+
+	string BuildPersona(NPCProfile p)
+	{
+		if (p == null) return "Name: Unknown\nMood: neutral\nBackstory: ";
+		return
+			$"Name: {p.npcName}\n" +
+			$"Mood: {p.mood}\n" +
+			$"Backstory: {(string.IsNullOrEmpty(p.backstory) ? "<empty>" : p.backstory)}";
+	}
+
+	string BuildPairSystem(NPCProfile a, NPCProfile b)
+	{
+		return
+			"You are two NPCs in a video game having a short, natural conversation. " +
+			"Always stay in character based on the provided persona. " +
+			"Keep replies concise (1–2 sentences).\n\n" +
+			$"Persona A:\n{BuildPersona(a)}\n\n" +
+			$"Persona B:\n{BuildPersona(b)}\n";
+	}
+
+	void AskWithPersona(MultiAIClient cli, NPCProfile persona, string systemBase, string userPrompt, System.Action<string> onReply)
+	{
+		if (cli == null) { onReply?.Invoke(null); return; }
+		string user = $"Persona:\n{BuildPersona(persona)}\n\n{userPrompt}";
+		cli.Ask(systemBase, user, onReply);
+	}
+
+
 	public void SendDialogue(string playerQuestion)
 	{
 		if (!client || !npc)
 		{
-			Debug.LogError("NPCDialogueManager: Missing ChatGPTClient or NPCProfile.");
+			Debug.LogError("NPCDialogueManager: Missing MultiAIClient or NPCProfile.");
 			return;
 		}
 
-		// 🔥 включаем анимацию разговора
 		if (animator && !string.IsNullOrWhiteSpace(talkBool))
 			animator.SetBool(talkBool, true);
-
-		string description =
-			$"Name: {npc.npcName}\n" +
-			$"Mood: {npc.mood}\n" +
-			$"Backstory: {(string.IsNullOrEmpty(npc.backstory) ? "<empty>" : npc.backstory)}";
 
 		string systemPrompt =
 			"You are roleplaying as an NPC in a video game. " +
 			"Always stay in character and answer like a person would. " +
 			"No more than 3 sentences.";
 
-		string userPrompt = description + "\n\nPlayer: " + playerQuestion;
+		string userPrompt = $"Persona:\n{BuildPersona(npc)}\n\nPlayer: {playerQuestion}";
 
 		client.Ask(systemPrompt, userPrompt, (reply) =>
 		{
 			ShowBubble(reply);
-
-			// 🔥 выключаем после ответа
 			if (animator && !string.IsNullOrWhiteSpace(talkBool))
 				animator.SetBool(talkBool, false);
 		});
@@ -107,17 +141,14 @@ public class NPCDialogueManager : MonoBehaviour
 
 	public void ClientAsk(string systemPrompt, string userPrompt, System.Action<string> onReply)
 	{
-		if (!client || !npc) { onReply?.Invoke(null); return; }
+		if (!client) { onReply?.Invoke(null); return; }
 
-		// 🔥 включаем анимацию на время вопроса
 		if (animator && !string.IsNullOrWhiteSpace(talkBool))
 			animator.SetBool(talkBool, true);
 
 		client.Ask(systemPrompt, userPrompt, reply =>
 		{
 			onReply?.Invoke(reply);
-
-			// 🔥 выключаем анимацию
 			if (animator && !string.IsNullOrWhiteSpace(talkBool))
 				animator.SetBool(talkBool, false);
 		});
@@ -132,17 +163,20 @@ public class NPCDialogueManager : MonoBehaviour
 		_lastChatTime = Time.time;
 		if (_bubble) _bubble.ShowText("");
 
-		// 🔥 выключаем анимацию
 		if (animator && !string.IsNullOrWhiteSpace(talkBool))
 			animator.SetBool(talkBool, false);
 
 		ResumeMovementSelf();
 		ResumeMovementPartner();
 
+		DialogueFinished?.Invoke(this);
+
 		_currentPartner = null;
 		_partnerWander = null;
 		_partnerAgent = null;
 	}
+
+
 	void TryFindPartnerAndChat()
 	{
 		if (Time.time - _lastChatTime < chatCooldown) return;
@@ -164,18 +198,26 @@ public class NPCDialogueManager : MonoBehaviour
 			if (other._inDialogue) continue;
 			if (Time.time - other._lastChatTime < other.chatCooldown) continue;
 
+			if (!client || npc == null) continue;
+			if (!other.client || other.npc == null) continue;
+
 			if (chatStartChance < 1f && Random.value > Mathf.Clamp01(chatStartChance)) continue;
 
 			StartCoroutine(RunDialogueWith(other));
 			return;
 		}
 	}
+
+
 	IEnumerator RunDialogueWith(NPCDialogueManager partner)
 	{
 		_inDialogue = true;
 		partner._inDialogue = true;
 		_lastChatTime = Time.time;
 		partner._lastChatTime = Time.time;
+
+		DialogueStarted?.Invoke(this);
+		partner.DialogueStarted?.Invoke(partner);
 
 		_currentPartner = partner;
 		EnsureSelfRefs();
@@ -187,7 +229,6 @@ public class NPCDialogueManager : MonoBehaviour
 			PauseMovementPartner();
 		}
 
-		// 🔥 включаем анимацию обоим собеседникам
 		if (animator && !string.IsNullOrWhiteSpace(talkBool))
 			animator.SetBool(talkBool, true);
 		if (partner.animator && !string.IsNullOrWhiteSpace(partner.talkBool))
@@ -198,7 +239,8 @@ public class NPCDialogueManager : MonoBehaviour
 			: "life";
 
 		int turns = Mathf.Max(2, Random.Range(Mathf.Min(minTurns, maxTurns), Mathf.Max(minTurns, maxTurns) + 1));
-		string sys = "You are NPCs chatting. Keep replies short (1–2 sentences), casual, and coherent with the partner's last line.";
+
+		string sysPair = BuildPairSystem(this.npc, partner.npc);
 
 		string lastA = null;
 		string lastB = null;
@@ -210,19 +252,20 @@ public class NPCDialogueManager : MonoBehaviour
 			if (speakerIsA)
 			{
 				string userPrompt = (turn == 0)
-					? $"Greet the other NPC and ask a short, specific question about {topic}. End with a question."
-					: $"Ask a short follow-up question about {topic} referencing the partner's last line: \"{TrimQuote(lastB, 80)}\". End with a question.";
+					? $"As Persona A, greet Persona B and ask a short, specific question about {topic}. End with a question."
+					: $"As Persona A, ask a brief follow-up about {topic}, referencing Persona B's last line: \"{TrimQuote(lastB, 80)}\". End with a question.";
 
 				bool done = false; lastA = null;
-				ClientAsk(sys, userPrompt, r => { lastA = string.IsNullOrWhiteSpace(r) ? "…" : r; done = true; });
+				AskWithPersona(this.client, this.npc, sysPair, userPrompt, r => { lastA = string.IsNullOrWhiteSpace(r) ? "…" : r; done = true; });
 				while (!done) yield return null;
 				ShowBubble(lastA);
 			}
 			else
 			{
-				string userPrompt = $"Briefly answer about {topic} to \"{TrimQuote(lastA, 80)}\". One or two sentences.";
+				string userPrompt =
+					$"As Persona B, briefly answer about {topic} to Persona A's line: \"{TrimQuote(lastA, 80)}\". One or two sentences.";
 				bool done = false; lastB = null;
-				partner.ClientAsk(sys, userPrompt, r => { lastB = string.IsNullOrWhiteSpace(r) ? "…" : r; done = true; });
+				AskWithPersona(partner.client, partner.npc, sysPair, userPrompt, r => { lastB = string.IsNullOrWhiteSpace(r) ? "…" : r; done = true; });
 				while (!done) yield return null;
 				partner.ShowBubble(lastB);
 			}
@@ -240,11 +283,15 @@ public class NPCDialogueManager : MonoBehaviour
 		{
 			bool lastIsA = ((turns - 1) % 2 == 0);
 			var speaker = lastIsA ? this : partner;
-			string sysBye = "You are an NPC. Say a short natural goodbye.";
+			var persona = lastIsA ? this.npc : partner.npc;
+			var cli = lastIsA ? this.client : partner.client;
+
+			string sysBye = BuildPairSystem(this.npc, partner.npc);
 			bool done = false; string bye = null;
-			speaker.ClientAsk(sysBye, "Goodbye.", r => { bye = string.IsNullOrWhiteSpace(r) ? PickFarewell() : r; done = true; });
+			AskWithPersona(cli, persona, sysBye, "Say a short natural goodbye.", r => { bye = string.IsNullOrWhiteSpace(r) ? PickFarewell() : r; done = true; });
 			while (!done) yield return null;
-			speaker.ShowBubble(bye);
+
+			if (lastIsA) ShowBubble(bye); else partner.ShowBubble(bye);
 		}
 
 		if (agentStopDuringChat)
@@ -253,7 +300,6 @@ public class NPCDialogueManager : MonoBehaviour
 			ResumeMovementPartner();
 		}
 
-		// 🔥 выключаем анимацию после разговора
 		if (animator && !string.IsNullOrWhiteSpace(talkBool))
 			animator.SetBool(talkBool, false);
 		if (partner.animator && !string.IsNullOrWhiteSpace(partner.talkBool))
@@ -262,12 +308,13 @@ public class NPCDialogueManager : MonoBehaviour
 		_inDialogue = false;
 		partner._inDialogue = false;
 
+		DialogueFinished?.Invoke(this);
+		partner.DialogueFinished?.Invoke(partner);
+
 		_currentPartner = null;
 		_partnerWander = null;
 		_partnerAgent = null;
 	}
-
-	// ===== Movement helpers =====
 
 	void EnsureSelfRefs()
 	{
@@ -295,15 +342,19 @@ public class NPCDialogueManager : MonoBehaviour
 		if (_wander != null)
 		{
 			_wander.SetAutonomySuspended(true);
+			_wanderAutonomyHeldByDialogue = true; 
 			if (_wander.enabled) { _wander.enabled = false; _disabledWander = true; }
 		}
 
 		if (_agent != null && _agent.enabled && _agent.isOnNavMesh)
 		{
 			_myPrevStopped = _agent.isStopped;
+
+			_hadPath = _agent.hasPath;
+			_savedDestination = _hadPath ? _agent.destination : _agent.transform.position;
+
 			_agent.isStopped = true;
 			_agent.updateRotation = false;
-			_agent.ResetPath();
 		}
 	}
 
@@ -312,14 +363,20 @@ public class NPCDialogueManager : MonoBehaviour
 		if (_wander != null)
 		{
 			if (_disabledWander && !_wander.enabled) { _wander.enabled = true; _disabledWander = false; }
-			_wander.SetAutonomySuspended(false);
+			if (_wanderAutonomyHeldByDialogue)
+			{
+				_wander.SetAutonomySuspended(false);
+				_wanderAutonomyHeldByDialogue = false;
+			}
 		}
 
 		if (_agent != null && _agent.enabled && _agent.isOnNavMesh)
 		{
-			_agent.isStopped = _myPrevStopped;
-			_agent.updateRotation = true;
+			if (_hadPath && !_agent.hasPath)
+				_agent.SetDestination(_savedDestination);
 
+			_agent.isStopped = _myPrevStopped == false ? false : _myPrevStopped;
+			_agent.updateRotation = true;
 		}
 	}
 
@@ -330,16 +387,19 @@ public class NPCDialogueManager : MonoBehaviour
 		if (_partnerWander != null)
 		{
 			_partnerWander.SetAutonomySuspended(true);
+			_partnerAutonomyHeldByDialogue = true;
 			if (_partnerWander.enabled) { _partnerWander.enabled = false; _partnerDisabledWander = true; }
 		}
 
 		if (_partnerAgent != null && _partnerAgent.enabled && _partnerAgent.isOnNavMesh)
 		{
 			_partnerPrevStopped = _partnerAgent.isStopped;
+
+			_partnerHadPath = _partnerAgent.hasPath;
+			_partnerSavedDestination = _partnerHadPath ? _partnerAgent.destination : _partnerAgent.transform.position;
+
 			_partnerAgent.isStopped = true;
 			_partnerAgent.updateRotation = false;
-
-			_partnerAgent.ResetPath();
 		}
 	}
 
@@ -350,18 +410,23 @@ public class NPCDialogueManager : MonoBehaviour
 		if (_partnerWander != null)
 		{
 			if (_partnerDisabledWander && !_partnerWander.enabled) { _partnerWander.enabled = true; _partnerDisabledWander = false; }
-			_partnerWander.SetAutonomySuspended(false);
+			if (_partnerAutonomyHeldByDialogue)
+			{
+				_partnerWander.SetAutonomySuspended(false);
+				_partnerAutonomyHeldByDialogue = false;
+			}
 		}
 
 		if (_partnerAgent != null && _partnerAgent.enabled && _partnerAgent.isOnNavMesh)
 		{
-			_partnerAgent.isStopped = _partnerPrevStopped;
-			_partnerAgent.updateRotation = true;
+			if (_partnerHadPath && !_partnerAgent.hasPath)
+				_partnerAgent.SetDestination(_partnerSavedDestination);
 
+			_partnerAgent.isStopped = _partnerPrevStopped == false ? false : _partnerPrevStopped;
+			_partnerAgent.updateRotation = true;
 		}
 	}
 
-	// ===== Utils =====
 
 	string TrimQuote(string s, int max)
 	{

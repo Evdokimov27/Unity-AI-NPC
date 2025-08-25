@@ -7,14 +7,14 @@ using UnityEngine.AI;
 public class NPCAIHubEditor : Editor
 {
 	// foldouts
-	bool foldProfile = true;
-	bool foldDialogue = true;
-	bool foldMovement = true;
+	bool foldProfile = false;
+	bool foldTarget = false;
+	bool foldDialogue = false;
+	bool foldMovement = false;
 	bool foldFollow = false;
 	bool foldWander = false;
 	bool foldInteractive = false;
 	bool foldCommentator = false;
-	bool foldLogs = false;
 
 	// styles
 	GUIStyle _title, _tag, _box, _featureOn, _featureOff;
@@ -60,6 +60,7 @@ public class NPCAIHubEditor : Editor
 		DrawCommandConsole(hub);
 		EditorGUILayout.Space(6);
 
+
 		// ===== ANIMATION =====
 		using (new EditorGUILayout.VerticalScope(_box))
 		{
@@ -77,7 +78,7 @@ public class NPCAIHubEditor : Editor
 		}
 
 		// ===== PROFILE =====
-		foldProfile = DrawSectionHeader("Dialogue.Profile", foldProfile);
+		foldProfile = DrawSectionHeader("Profile", foldProfile);
 		if (foldProfile)
 		{
 			using (new EditorGUILayout.VerticalScope(_box))
@@ -91,7 +92,18 @@ public class NPCAIHubEditor : Editor
 				}
 			}
 		}
-
+		// ===== TARGET FOR MOVEMENT =====
+		foldTarget = DrawSectionHeader("Target", foldTarget);
+		if (foldTarget)
+		{
+			var resolveMove = FindFlat<ResolveTargetAuto>(hub, "Movement.ResolveTarget");
+			if (resolveMove != null)
+			{
+				EditorGUILayout.LabelField("Resolve Target", _tag);
+				CreateCachedEditorSafe(resolveMove, ref edResolve);
+				edResolve?.OnInspectorGUI();
+			}
+		}
 		// ===== DIALOGUE =====
 		if (hub.featureDialogue)
 		{
@@ -119,6 +131,9 @@ public class NPCAIHubEditor : Editor
 			}
 		}
 
+		// ===== SPEED ALL MOVEMENT =====
+		if (hub.featureMovement || hub.featureFollow || hub.featureWander) EditorGUILayout.PropertyField(serializedObject.FindProperty("speedMovement"));
+
 		// ===== MOVEMENT =====
 		if (hub.featureMovement)
 		{
@@ -144,7 +159,6 @@ public class NPCAIHubEditor : Editor
 					var walk = FindFlat<WalkAction>(hub, "Movement.Walk");
 					if (walk != null)
 					{
-						walk.agentOverride = rootAgent;
 						EditorGUILayout.LabelField("WalkAction", _tag);
 						CreateCachedEditorSafe(walk, ref edWalk);
 						edWalk?.OnInspectorGUI();
@@ -169,7 +183,7 @@ public class NPCAIHubEditor : Editor
 			{
 				using (new EditorGUILayout.VerticalScope(_box))
 				{
-					var follow = FindFlat<FollowAction>(hub, "Follow.Module");
+					var follow = FindFlat<FollowAction>(hub, "Movement.Follow");
 					if (follow != null)
 					{
 						EditorGUILayout.LabelField("FollowAction", _tag);
@@ -207,20 +221,12 @@ public class NPCAIHubEditor : Editor
 			{
 				using (new EditorGUILayout.VerticalScope(_box))
 				{
-					var resolve = FindFlat<ResolveTargetAuto>(hub, "Interact.ResolveAndUse");
-					if (resolve != null)
+					var inter = FindFlat<InteractAction>(hub, "Interact.ResolveAndUse");
+					if (inter != null)
 					{
-						EditorGUILayout.LabelField("Resolve Target", _tag);
-						CreateCachedEditorSafe(resolve, ref edResolve);
-						edResolve?.OnInspectorGUI();
-
-						var inter = resolve.GetComponent<InteractAction>();
-						if (inter != null)
-						{
-							EditorGUILayout.LabelField("Interact Action", _tag);
-							CreateCachedEditorSafe(inter, ref edInteract);
-							edInteract?.OnInspectorGUI();
-						}
+						EditorGUILayout.LabelField("Interact Action", _tag);
+						CreateCachedEditorSafe(inter, ref edInteract);
+						edInteract?.OnInspectorGUI();
 					}
 				}
 			}
@@ -329,14 +335,29 @@ public class NPCAIHubEditor : Editor
 			using (new EditorGUILayout.HorizontalScope())
 			{
 				ToggleFeatureProp("Movement", "featureMovement", "d_NavMeshAgent Icon", "Movement", () => hub.PerformOneClickSetup());
+			}
+			using (new EditorGUILayout.HorizontalScope())
+			{
 				ToggleFeatureProp("Wander", "featureWander", "d_NavMeshObstacle Icon", "Wander", () => hub.PerformOneClickSetup());
+			}
+			using (new EditorGUILayout.HorizontalScope())
+			{
 				ToggleFeatureProp("Follow", "featureFollow", "d_StepButton", "Follow module", () => hub.PerformOneClickSetup());
+			}
+			using (new EditorGUILayout.HorizontalScope())
+			{
 				ToggleFeatureProp("Interactive", "featureInteractive", "d_ToolHandleLocal", "Interactive", () => hub.PerformOneClickSetup());
 			}
 			using (new EditorGUILayout.HorizontalScope())
 			{
 				ToggleFeatureProp("Dialogue", "featureDialogue", "d_AudioSource Icon", "Dialogue", () => hub.PerformOneClickSetup());
+			}
+			using (new EditorGUILayout.HorizontalScope())
+			{
 				ToggleFeatureProp("Commentator", "featureCommentator", "d_Profiler.Audio", "Commentator", () => hub.PerformOneClickSetup());
+			}
+			using (new EditorGUILayout.HorizontalScope())
+			{
 				ToggleFeatureProp("Logs", "featureLogs", "d_UnityEditor.ConsoleWindow", "Logging", () => hub.PerformOneClickSetup());
 			}
 			using (new EditorGUILayout.HorizontalScope())

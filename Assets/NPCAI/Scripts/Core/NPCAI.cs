@@ -23,6 +23,7 @@ public class NPCAI : MonoBehaviour
 	public FollowAction followStep;
 
 	public Animator animator;
+	public float speedMovement = 2f;
 	public string walkBool = "isWalking";
 	public string talkBool = "isTalking";
 	public string interactBool = "isInteracting";
@@ -75,7 +76,7 @@ public class NPCAI : MonoBehaviour
 	};
 
 	public bool useLLMIntent = true;
-	public ChatGPTClient intentClient;
+	public MultiAIClient intentClient;
 	public float llmTimeoutSeconds = 2.0f;
 
 	[Header("Flow")]
@@ -85,6 +86,8 @@ public class NPCAI : MonoBehaviour
 	[Header("Permissions (controlled by NPCAIHub)")]
 	public bool allowDialogue = true;
 	public bool allowMovement = true;
+	public bool allowInteractive = true;
+	public bool allowFollow = true;
 
 	private IActionStep _currentStep;
 	private ActionContext _ctx;
@@ -121,12 +124,18 @@ public class NPCAI : MonoBehaviour
 
 		UpdateMovementAnimation();
 	}
+
 	private void UpdateMovementAnimation()
 	{
 		if (!animator || agent == null || !agent.enabled || !agent.isOnNavMesh)
 			return;
 
 		bool isMoving = agent.velocity.sqrMagnitude > 0.01f && !agent.isStopped;
+		agent.speed = speedMovement;
+		float moveSpeed = agent.velocity.magnitude;
+		float baseSpeed = 2.0f;
+		animator.speed = moveSpeed / baseSpeed;
+		if (moveSpeed < 0.1f) animator.speed = 1f;
 
 		SetBoolIfNotEmpty(walkBool, false);
 		SetBoolIfNotEmpty(followBool, false);
@@ -134,18 +143,15 @@ public class NPCAI : MonoBehaviour
 
 		if (!isMoving)
 		{
-			if (verboseLogs) Debug.Log("Anim: agent NOT moving, all movement flags off.");
 			return;
 		}
 
 		if (_currentStep is WalkAction)
 		{
-			if (verboseLogs) Debug.Log("Anim: WalkAction active → " + walkBool);
 			SetBoolIfNotEmpty(walkBool, true);
 		}
 		else if (_currentStep is FollowAction)
 		{
-			if (verboseLogs) Debug.Log("Anim: FollowAction active → " + followBool);
 			SetBoolIfNotEmpty(followBool, true);
 		}
 		else
@@ -154,22 +160,11 @@ public class NPCAI : MonoBehaviour
 			{
 				if (!_wander.IsAutonomySuspended)
 				{
-					if (verboseLogs) Debug.Log("Anim: Wander active → " + wanderBool);
 					SetBoolIfNotEmpty(wanderBool, true);
 				}
-				else
-				{
-					if (verboseLogs) Debug.Log("Anim: Wander found, but autonomy suspended.");
-				}
-			}
-			else
-			{
-				if (verboseLogs) Debug.Log("Anim: No Wander running." + " " + _wander);
 			}
 		}
 	}
-
-
 
 	public void GoTo(string userCommand)
 	{
@@ -203,9 +198,66 @@ public class NPCAI : MonoBehaviour
 		if (_wander) _wander.SetAutonomySuspended(v);
 	}
 
+	Transform _runtimeFallbackTarget;
+
+	// внутри NPCAI
+	Transform GetOrCreateRuntimeTarget(Transform parent)
+	{
+		if (_runtimeFallbackTarget == null)
+		{
+			var go = new GameObject("~RuntimeMoveTarget");
+			go.hideFlags = HideFlags.HideInHierarchy | HideFlags.HideAndDontSave;
+			_runtimeFallbackTarget = go.transform;
+		}
+		if (parent != null)
+		{
+			_runtimeFallbackTarget.SetParent(parent, true); // true == worldPositionStays
+		}
+		return _runtimeFallbackTarget;
+	}
+
+	bool TryExtractTransformFromBlackboard(object bb, out Transform t)
+	{
+		t = null;
+		if (bb == null) return false;
+		var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+		// часто встречающиеся имена
+		string[] names = { "navTarget", "targetTransform", "target", "transform" };
+		foreach (var n in names)
+		{
+			var f = bb.GetType().GetField(n, flags);
+			if (f != null && typeof(Transform).IsAssignableFrom(f.FieldType))
+			{
+				t = f.GetValue(bb) as Transform;
+				if (t) return true;
+			}
+		}
+		return false;
+	}
+
+	bool TryExtractPositionFromBlackboard(object bb, out Vector3 pos)
+	{
+		pos = default;
+		if (bb == null) return false;
+		var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+		// имена для позиций
+		string[] names = { "navPosition", "destination", "dest", "position", "pos", "targetPosition" };
+		foreach (var n in names)
+		{
+			var f = bb.GetType().GetField(n, flags);
+			if (f != null && f.FieldType == typeof(Vector3))
+			{
+				pos = (Vector3)f.GetValue(bb);
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private IEnumerator RunPipeline()
 	{
 		SuspendWander(true);
+		bool needInteract = false; 
 
 		bool gotLLM = false;
 		if (taskMode == TaskMode.Auto && useLLMIntent && intentClient)
@@ -213,7 +265,12 @@ public class NPCAI : MonoBehaviour
 			if (verboseLogs) Debug.Log("NPCAI: waiting for LLM intent...");
 			HighLevelIntent? llm = null;
 			yield return InferIntentLLM(_ctx.userCommand, _ctx.blackboard, r => llm = r);
-			if (llm.HasValue) { _intent = llm.Value; gotLLM = true; if (verboseLogs) Debug.Log($"NPCAI: LLM intent -> {_intent} (wait={_ctx.waitSeconds:0.##}s)"); }
+			if (llm.HasValue)
+			{
+				_intent = llm.Value;
+				gotLLM = true;
+				if (verboseLogs) Debug.Log($"NPCAI: LLM intent -> {_intent} (wait={_ctx.waitSeconds:0.##}s)");
+			}
 			else if (verboseLogs) Debug.Log("NPCAI: LLM intent failed/timeout. Using keyword fallback.");
 		}
 		if (!gotLLM)
@@ -228,6 +285,61 @@ public class NPCAI : MonoBehaviour
 		{ if (verboseLogs) Debug.Log("NPCAI: Dialogue blocked by Hub."); SuspendWander(false); yield break; }
 		if ((_intent == HighLevelIntent.MoveOnly || _intent == HighLevelIntent.MoveAndInteract || _intent == HighLevelIntent.Follow) && !allowMovement)
 		{ if (verboseLogs) Debug.Log("NPCAI: Movement blocked by Hub."); SuspendWander(false); yield break; }
+		if ((_intent == HighLevelIntent.MoveAndInteract) && !allowInteractive)
+		{ if (verboseLogs) Debug.Log("NPCAI: Interactive blocked by Hub."); SuspendWander(false); yield break; }
+		if ((_intent == HighLevelIntent.Follow) && !allowFollow)
+		{ if (verboseLogs) Debug.Log("NPCAI: Follow blocked by Hub."); SuspendWander(false); yield break; }
+
+		if (resolveStep)
+		{
+			bool ok = false;
+			if (verboseLogs) Debug.Log("NPCAI: ResolveTargetAuto...");
+			yield return RunStep(resolveStep, r => ok = r);
+
+			if (taskMode == TaskMode.Auto && !gotLLM)
+			{
+				bool? refined = DecideFromBlackboard(_ctx.blackboard, _ctx.userCommand);
+				if (refined.HasValue && _intent != HighLevelIntent.Follow)
+				{
+					var before = _intent;
+					_intent = refined.Value ? HighLevelIntent.MoveAndInteract : HighLevelIntent.MoveOnly;
+					if (verboseLogs && before != _intent)
+						Debug.Log($"NPCAI: refined intent -> {_intent} (from blackboard)");
+				}
+			}
+
+			needInteract = (_intent == HighLevelIntent.MoveAndInteract);
+
+			if (!ok)
+			{
+				if (needInteract && stopOnFirstFail)
+				{
+					if (verboseLogs) Debug.LogWarning("NPCAI: target not resolved for interaction — stopping.");
+					SuspendWander(false); yield break;
+				}
+
+				if (_ctx.explicitTarget == null)
+				{
+					if (TryExtractTransformFromBlackboard(_ctx.blackboard, out var t) && t != null)
+					{
+						_ctx.explicitTarget = t.gameObject;
+						if (verboseLogs) Debug.Log($"NPCAI: salvaged target Transform '{t.name}' from blackboard for MoveOnly.");
+					}
+					else if (TryExtractPositionFromBlackboard(_ctx.blackboard, out var p))
+					{
+						var rt = GetOrCreateRuntimeTarget(transform);
+						rt.position = p;
+						_ctx.explicitTarget = rt.gameObject;
+						if (verboseLogs) Debug.Log($"NPCAI: created runtime target at {p} for MoveOnly.");
+					}
+				}
+
+				if (verboseLogs) Debug.Log("NPCAI: resolve failed, but continuing because intent is MoveOnly.");
+			}
+		}
+
+		if (verboseLogs) Debug.Log($"NPCAI: final intent -> {_intent}");
+
 
 		if (_intent == HighLevelIntent.Dialogue)
 		{
@@ -250,26 +362,6 @@ public class NPCAI : MonoBehaviour
 
 		if (!agent) { Debug.LogError("NPCAI: NavMeshAgent not set."); SuspendWander(false); yield break; }
 
-		if (resolveStep)
-		{
-			bool ok = false;
-			if (verboseLogs) Debug.Log("NPCAI: ResolveTargetAuto...");
-			yield return RunStep(resolveStep, r => ok = r);
-
-			if (taskMode == TaskMode.Auto)
-			{
-				bool? refined = DecideFromBlackboard(_ctx.blackboard, _ctx.userCommand);
-				if (refined.HasValue && _intent != HighLevelIntent.Follow)
-					_intent = refined.Value ? HighLevelIntent.MoveAndInteract : HighLevelIntent.MoveOnly;
-			}
-
-			if (!ok && stopOnFirstFail && _intent != HighLevelIntent.Follow)
-			{
-				if (verboseLogs) Debug.LogWarning("NPCAI: target not resolved — stopping.");
-				SuspendWander(false); yield break;
-			}
-		}
-
 		if (_intent == HighLevelIntent.Follow)
 		{
 			if (!followStep)
@@ -278,16 +370,15 @@ public class NPCAI : MonoBehaviour
 				SuspendWander(false); yield break;
 			}
 
-			bool ok = false; 
+			bool ok = false;
 			if (verboseLogs) Debug.Log("NPCAI: FollowAction...");
 			yield return RunStep(followStep, r => ok = r);
 			SuspendWander(false); yield break;
 		}
 
 		if (!walkStep) { Debug.LogError("NPCAI: WalkAction not set."); SuspendWander(false); yield break; }
-		bool needInteract = (_intent == HighLevelIntent.MoveAndInteract);
 
-		if (_ctx.explicitTarget && commentator) commentator.CommentOnAction("Walk", _ctx.explicitTarget);
+		if (_ctx.explicitTarget && commentator) commentator.CommentOnAction("Walk", _ctx.explicitTarget, _ctx.userCommand);
 		if (talkOnStartMove) SafeBegin(talkOnStartMove, "TalkOnStartMove");
 		if (talkDuringMove && talkDuringMove.mode == TalkAction.TalkMode.GenerateLoop) SafeBegin(talkDuringMove, "TalkDuringMove loop");
 
@@ -305,7 +396,7 @@ public class NPCAI : MonoBehaviour
 		if (needInteract)
 		{
 			if (!interactStep) { Debug.LogError("NPCAI: InteractAction missing."); SuspendWander(false); yield break; }
-			if (_ctx.explicitTarget && commentator) commentator.CommentOnAction("Interact", _ctx.explicitTarget);
+			if (_ctx.explicitTarget && commentator) commentator.CommentOnAction("Interact", _ctx.explicitTarget, _ctx.userCommand);
 			bool interOk = false;
 			if (verboseLogs) Debug.Log("NPCAI: InteractAction...");
 			yield return RunStep(interactStep, r => interOk = r);
@@ -335,6 +426,7 @@ public class NPCAI : MonoBehaviour
 
 		onDone?.Invoke(result);
 	}
+
 	private void SafeBegin(IActionStep step, string label)
 	{
 		try
@@ -347,6 +439,7 @@ public class NPCAI : MonoBehaviour
 			Debug.LogWarning($"NPCAI: error while starting {label}");
 		}
 	}
+
 	private void SetBoolIfNotEmpty(string param, bool value)
 	{
 		if (!animator) return;
@@ -380,11 +473,9 @@ public class NPCAI : MonoBehaviour
 		SetBoolIfNotEmpty(interactBool, false);
 		SetBoolIfNotEmpty(waitBool, false);
 
-		if (step is TalkAction) SetBoolIfNotEmpty(talkBool, true);
-		else if (step is InteractAction) SetBoolIfNotEmpty(interactBool, true);
+		if (step is InteractAction) SetBoolIfNotEmpty(interactBool, true);
 		else if (step is WaitAction) SetBoolIfNotEmpty(waitBool, true);
 	}
-
 
 	private HighLevelIntent DecideIntent(string text, out float waitSeconds, out string dialogText)
 	{
@@ -399,7 +490,7 @@ public class NPCAI : MonoBehaviour
 
 		if (followKeywords != null && followKeywords.Matches(text))
 		{
-			TryParseWaitSeconds(text, out waitSeconds); 
+			TryParseWaitSeconds(text, out waitSeconds);
 			return HighLevelIntent.Follow;
 		}
 
